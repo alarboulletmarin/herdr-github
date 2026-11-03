@@ -259,9 +259,9 @@ export default class GitHub extends View {
       .child(div().pt(2).child(glyph(g, 16, color)))
       .child(v_flex().flex_1().min_w(0).gap(4)
         .child(div().text_size(13).font_semibold().text_color(t.foreground).child(item.title))
-        .child(h_flex().gap(4).flex_wrap().items_center().text_size(11.5).text_color(t.muted)
-          .child(div().child(meta))
-          .children((item.labels ?? []).slice(0, 4).map((l) => labelChip(l, t, true)))))
+        .child(div().text_size(11.5).text_color(t.muted).child(meta))
+        // Labels on their own row: sharing the meta's row, the last one wrapped alone.
+        .when(item.labels?.length > 0, (e) => e.child(h_flex().gap(4).flex_wrap().items_center().children(item.labels.slice(0, 4).map((l) => labelChip(l, t, true))))))
       .child(v_flex().flex_none().items_end().gap(4).pt(1)
         .child(h_flex().gap(8).items_center().text_size(11.5).text_color(t.muted)
             .when(Boolean(checks?.state), (e) => e.child(glyphOf(checks.state === "failure" ? "x-circle" : checks.state === "pending" ? "dot" : "check", 14, checks.state === "failure" ? p.closed : checks.state === "pending" ? p.attention : p.open, t)))
