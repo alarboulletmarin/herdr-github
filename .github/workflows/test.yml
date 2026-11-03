@@ -1,0 +1,13 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Briefs, CI logs, pictures and timelines
+        working-directory: mods/github
+        run: for t in *.test.mjs; do node "$t"; done
