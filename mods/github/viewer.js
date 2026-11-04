@@ -1,12 +1,12 @@
 import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
-import { theme, closeOverlay, setShared, shared, agents, run } from "herdr";
+import { theme, closeOverlay, setShared, shared, run } from "herdr";
 import { split, want, avatar } from "./media.js";
 import { entries, tally, loginOf } from "./timeline.js";
 import { primer, glyph, spinner, ago, openUrl, issueState, prState, checksOf, runState, glyphOf, labelChip, button, badge, segmented } from "./ui.js";
 import { ghJson, gh, localState } from "./gh.js";
 import { issueBrief, prBrief } from "./brief.js";
-import { copied, pickAgent, copyMenu, setWork } from "./actions.js";
+import { copied, pickAgent, copyMenu, setWork, liveAgents, workOf } from "./actions.js";
 import { STAGES, stageOf } from "./work.js";
 
 const FIELDS = {
@@ -129,7 +129,7 @@ export class Viewer {
   }
   startAgent() {
     const local = this.local();
-    pickAgent({ name: `${this.pr() ? "PR " : ""}#${this.number} ${this.repo.split("/")[1]}`, ref: this.key(), brief: this.brief(), folder: local?.folder ?? null, space: local?.space ?? null });
+    pickAgent({ name: `${this.pr() ? "PR " : ""}#${this.number} ${this.repo.split("/")[1]}`, ref: this.key(), work: workOf(this.item, this.kind), brief: this.brief(), folder: local?.folder ?? null, space: local?.space ?? null });
   }
   checkout() {
     const folder = this.local()?.folder;
@@ -303,7 +303,7 @@ export class Viewer {
 
     const mine = i.assignees.some((a) => a.login === me), labels = this.repoLabels[this.repo];
     const linked = pr ? i.closingIssuesReferences ?? [] : i.closedByPullRequestsReferences ?? [];
-    const mark = (shared("github.work") ?? {})[this.key()], s = stageOf(i, mark, agents(), this.kind);
+    const mark = (shared("github.work") ?? {})[this.key()], s = stageOf(i, mark, liveAgents(), this.kind);
     const status = v_flex().gap(8)
       .child(segmented("stage", STAGES.filter(([k]) => k !== "done"), mark?.by === "hand" ? mark.stage : null, t, (k, _cx) => setWork(this.key(), k)))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)

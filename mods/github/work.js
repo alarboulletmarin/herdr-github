@@ -10,7 +10,7 @@ const closed = (i) => /^(CLOSED|MERGED)$/.test(String(i.state).toUpperCase());
 // Returns { stage, why, agent } where agent is the live agent working on it, if any.
 export function stageOf(item, mark, agents = [], kind = item.headRefName !== undefined ? "pr" : "issue") {
   if (closed(item)) return { stage: "done", why: String(item.state).toUpperCase() === "MERGED" ? "Merged" : "Closed" };
-  const agent = mark?.tab ? agents.find((a) => a.tab_name === mark.tab) ?? null : null;
+  const agent = agentOf(mark, agents);
   if (mark?.by === "hand") return { stage: mark.stage, why: "Set by you", agent };
   if (agent) return { stage: "doing", why: agent.status === "working" ? "Agent working" : agent.status === "blocked" ? "Agent needs you" : "Agent waiting", agent };
   if (kind === "pr") return item.isDraft ? { stage: "doing", why: "Draft" } : { stage: "review", why: "Open pull request" };
@@ -39,4 +39,31 @@ export function columns(items, marks = {}, agents = []) {
   }
   for (const k in out) out[k].sort((a, b) => Date.parse(b.item.updatedAt ?? 0) - Date.parse(a.item.updatedAt ?? 0));
   return out;
+}
+
+// ---- the agent's own worktree ----
+// Herdr's convention (its worktree mod): <home>/.herdr/worktrees/<repo>/<branch, anything odd as dashes>.
+export const dirSlug = (branch) => branch.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+// The branch an issue's agent works on, as the brief has always named it; a pull request keeps its own.
+export function branchFor({ kind, number, title, labels = [], headRefName }, slug) {
+  if (kind === "pr") return headRefName;
+  return `${labels.some((l) => /bug/i.test(l.name ?? l)) ? "fix" : "feat"}/${number}-${slug(title)}`.replace(/-$/, "");
+}
+export const worktreePath = (home, repo, branch) => `${home}/.herdr/worktrees/${repo.split("/")[1]}/${dirSlug(branch)}`;
+// Put first in the agent's brief: where it already is, so it neither branches again nor leaves.
+export function worktreeNote({ folder, branch, base, reused }) {
+  return [
+    "## Workspace (already prepared)",
+    "",
+    `- You are in a dedicated git worktree: \`${folder}\`, on branch \`${branch}\`${base ? `, created from \`${base}\`` : ""}${reused ? " (it existed already: read `git log` and `git status` first, earlier work may be there)" : ""}.`,
+    "- Work and commit there. Don't create or switch branches, don't touch the main checkout: this replaces any step below that gets or creates a branch.",
+    "",
+    "",
+  ].join("\n");
+}
+// The agent on that item: the one working in its worktree; without a worktree, the tab it was started in
+// (a name, so two repositories called the same can mix up: the worktree is what makes it exact).
+export function agentOf(mark, agents) {
+  if (mark?.folder) return agents.find((a) => a.cwd && (a.cwd === mark.folder || a.cwd.startsWith(`${mark.folder}/`))) ?? null;
+  return mark?.tab ? agents.find((a) => a.tab_name === mark.tab) ?? null : null;
 }

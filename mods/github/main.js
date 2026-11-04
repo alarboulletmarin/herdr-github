@@ -1,13 +1,13 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, agents, run, layout, theme, openOverlay, closeOverlay, notify, props, shared, setShared, nextCommand } from "herdr";
+import { spaces, panes, focused, run, layout, theme, openOverlay, closeOverlay, notify, props, shared, setShared, nextCommand } from "herdr";
 import { primer, glyph, spinner, ago, day, openUrl, issueState, prState, runState, checksOf, glyphOf, labelChip, button, counter, blankslate, skeleton, badge } from "./ui.js";
 import { gh, ghJson, account, repoOf, checkouts, load, localState, ROOTS } from "./gh.js";
 import { issueBrief, prBrief } from "./brief.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
 import { Board, renderStageMenu } from "./board.js";
-import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork } from "./actions.js";
+import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork, liveAgents, workOf } from "./actions.js";
 import { stageOf, ref } from "./work.js";
 
 const PAGE = 50, SYNC = 60000, LIVE = 10000;
@@ -214,7 +214,7 @@ export default class GitHub extends View {
     cx.spawn(async () => {
       try {
         const l = this.locals[item.repo];
-        pickAgent({ name: `${kind === "pr" ? "PR " : ""}#${item.number} ${item.repo.split("/")[1]}`, ref: ref(item), brief: await this.brief(item, kind), folder: l?.folder ?? null, space: l?.space ?? null });
+        pickAgent({ name: `${kind === "pr" ? "PR " : ""}#${item.number} ${item.repo.split("/")[1]}`, ref: ref(item), work: workOf(item, kind), brief: await this.brief(item, kind), folder: l?.folder ?? null, space: l?.space ?? null });
       } catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });
   }
@@ -538,7 +538,7 @@ export default class GitHub extends View {
     if ((this.away && !away) || (!away && ctx !== this.ctx)) { this.ctx = ctx; this.refresh(cx, true); }
     this.away = away;
     if (away && !this.fixed) return this.shell(t); // hidden() reads the side panel: a pane fixed on a repository draws anyway
-    this.work = shared("github.work") ?? {}; this.agentsNow = agents();
+    this.work = shared("github.work") ?? {}; this.agentsNow = liveAgents();
     const changed = shared("github.changed");
     if (changed?.at && changed.at !== this.changedAt) { this.changedAt = changed.at; this.refresh(cx, true); }
     const picked = shared("github.pick");

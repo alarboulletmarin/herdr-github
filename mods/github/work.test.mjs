@@ -1,5 +1,6 @@
 // node mods/github/work.test.mjs
-import { stageOf, marked, ref, columns } from "./work.js";
+import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf, dirSlug } from "./work.js";
+import { slug } from "./brief.js";
 import assert from "assert";
 
 const open = { repo: "o/r", number: 7, state: "OPEN" };
@@ -44,4 +45,22 @@ assert.deepEqual(nums("review"), [2], "PR #5 closes #2: one card, the issue's");
 assert.deepEqual(nums("done"), [3]);
 assert.equal(c.doing[0].kind, "pr"); assert.equal(c.doing[1].kind, "issue");
 assert.deepEqual(Object.values(columns([])).flat(), [], "empty board");
+// The agent's worktree.
+assert.equal(branchFor({ kind: "issue", number: 12, title: "Export: save a note as PDF", labels: [] }, slug), "feat/12-export-save-a-note-as-pdf");
+assert.equal(branchFor({ kind: "issue", number: 3, title: "Crash", labels: [{ name: "bug" }] }, slug), "fix/3-crash");
+assert.equal(branchFor({ kind: "issue", number: 4, title: "🎉", labels: [] }, slug), "feat/4", "no usable word: no dangling dash");
+assert.equal(branchFor({ kind: "pr", number: 9, headRefName: "someone/topic" }, slug), "someone/topic");
+assert.equal(worktreePath("/home/a", "o/bref", "feat/12-x"), "/home/a/.herdr/worktrees/bref/feat-12-x");
+assert.equal(dirSlug("a b/c:d"), "a-b-c-d"); assert.equal(dirSlug("/x/"), "x");
+const note = worktreeNote({ folder: "/w/f", branch: "feat/1-x", base: "origin/main" });
+assert.match(note, /`\/w\/f`, on branch `feat\/1-x`, created from `origin\/main`/); assert.match(note, /Don't create or switch branches/); assert.match(note, /replaces any step below that gets or creates a branch/); assert.doesNotMatch(note, /existed already/);
+assert.match(worktreeNote({ folder: "/w/f", branch: "b", reused: true }), /existed already/);
+const wt = { stage: "doing", by: "agent", tab: "#7 api", folder: "/h/.herdr/worktrees/api/feat-7-x" };
+const there = { tab_name: "#7 api", cwd: "/h/.herdr/worktrees/api/feat-7-x/src", status: "working" };
+const homonym = { tab_name: "#7 api", cwd: "/elsewhere", status: "blocked" };
+assert.equal(agentOf(wt, [homonym, there]), there, "the folder wins over a tab of the same name");
+assert.equal(agentOf(wt, [{ ...there, cwd: "/h/.herdr/worktrees/api/feat-7-xy" }]), null, "a sibling folder with a longer name isn't it");
+assert.equal(agentOf({ stage: "doing", by: "agent", tab: "#7 api" }, [homonym]), homonym, "no worktree: the tab name, as before");
+assert.equal(agentOf(null, [there]), null);
+assert.equal(stageOf(open, { ...wt, folder: "/x" }, [{ status: "working", cwd: "/x" }]).why, "Agent working");
 console.log("work ok");

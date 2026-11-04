@@ -1,10 +1,10 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, shared, agents, openOverlay, closeOverlay } from "herdr";
+import { theme, shared, openOverlay, closeOverlay } from "herdr";
 import { primer, glyph, spinner, ago, issueState, prState, labelChip, button, blankslate, under } from "./ui.js";
 import { load } from "./gh.js";
 import { STAGES, columns, ref } from "./work.js";
-import { setWork } from "./actions.js";
+import { setWork, liveAgents } from "./actions.js";
 
 const PAGE = 30, SYNC = 60000;
 const TONE = { todo: "neutral", doing: "attention", review: "link", done: "done" };
@@ -93,7 +93,7 @@ export class Board {
       ? blankslate(t, { icon: "alert", tone: primer(t).closed, title: "Couldn't load the board", body: this.error, actions: [button("retry", "Retry", t, (_e, cx) => this.load(cx), { icon: "refresh" })] })
       : blankslate(t, { icon: "spin", title: "Loading the board…", body: `Issues and pull requests of ${this.repo}.` }));
     // Read once per render: agents() and shared() cross into the app.
-    const cols = columns(this.items, shared("github.work") ?? {}, agents());
+    const cols = columns(this.items, shared("github.work") ?? {}, liveAgents());
     return frame.child(h_flex().flex_1().min_h(0).p(16).gap(12).items_start().children(STAGES.map((s) => this.column(s, cols[s[0]], t))));
   }
 }
