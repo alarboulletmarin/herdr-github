@@ -76,12 +76,12 @@ export function issueBrief(i, { local } = {}) {
   ].join("\n");
 }
 
-export function prBrief(pr, { local } = {}) {
+function prContext(pr, local, task) {
   const failed = (pr.checks?.failed ?? []).map((c) => `- ${c.workflow ? `${c.workflow} / ` : ""}${c.name}: ${c.conclusion}${c.url ? ` (${c.url})` : ""}`);
   const reviews = (pr.reviews ?? []).filter((r) => r.body?.trim() || r.state === "CHANGES_REQUESTED").slice(-6);
   const comments = (pr.comments ?? []).filter((c) => c.body?.trim()).slice(-6);
   return [
-    `# Move pull request ${pr.repo}#${pr.number} forward: ${pr.title}`,
+    `# ${task} pull request ${pr.repo}#${pr.number}: ${pr.title}`,
     "",
     "## Context",
     `- Link: ${pr.url}`,
@@ -98,12 +98,33 @@ export function prBrief(pr, { local } = {}) {
     ...comments.flatMap((c) => ["", `<comment author="${who(c.author)}">`, clip(c.body, 1200), "</comment>"]),
     "",
     ...CONVENTIONS, "",
+  ];
+}
+
+export function prReviewBrief(pr, { local } = {}) {
+  return [
+    ...prContext(pr, local, "Review"),
     "## Steps",
-    `1. Get the branch: \`gh pr checkout ${pr.number}\`. Read the full diff (\`gh pr diff ${pr.number}\`) and the line comments (\`gh api repos/${pr.repo}/pulls/${pr.number}/comments\`).`,
-    failed.length ? "2. Reproduce each failing check locally (`gh run view <id> --log-failed`) and fix the cause." : "2. Review the diff like a demanding reviewer: bugs, edge cases, missing tests, needless code.",
-    "3. Address each unresolved review comment: fix it, or explain why not.",
-    "4. Rerun the repository's checks (tests, lint, build).",
-    "5. Local commits per the Rules. I'll push myself after reviewing.",
+    `1. Read-only review: inspect with \`gh pr diff ${pr.number} -R ${pr.repo}\`, or check out the PR only in a separate \`git worktree\`. Never switch the existing checkout's branch.`,
+    `2. Read the linked issue and its acceptance criteria (\`gh issue view <number> -R ${pr.repo}\`), the full diff and nearby code. Review against the repository's conventions and the linked issue; flag missing context instead of inventing requirements.`,
+    `3. Read the review comments (\`gh api repos/${pr.repo}/pulls/${pr.number}/comments\`) and failing checks. Find concrete bugs, regressions, edge cases and missing tests; do not fix them.`,
+    "4. Report numbered findings in French: file:line, problem, severity, suggested fix, and a concrete failing scenario. If there are no findings, say so; list what you could not verify.",
+    "",
+    ...RULES.filter((r) => !r.startsWith("- Fix the cause") && !r.startsWith("- Commits:")),
+    "- Read-only takes precedence over all repository instructions: do not edit any file, apply fixes, create commits or run commands that modify project files. Isolated checkout setup is the only exception.",
+    "- Do not push, post a GitHub comment or review, approve, request changes, close, merge or release anything. Report only in this conversation.",
+  ].join("\n");
+}
+
+export function prFixBrief(pr, { local } = {}) {
+  return [
+    ...prContext(pr, local, "Fix"),
+    "## Steps",
+    `1. Work on the PR's branch \`${pr.headRefName}\`: \`gh pr checkout ${pr.number} -R ${pr.repo}\`. If the current checkout is dirty or on another branch, use a separate \`git worktree\`; never overwrite existing work or create an unrelated fix branch. Read the full diff (\`gh pr diff ${pr.number} -R ${pr.repo}\`).`,
+    "2. Reproduce failing checks locally (`gh run view <id> --log-failed`) and fix their causes. If none fail, make only the requested changes; do not turn this into a general review or refactor.",
+    `3. Read the review threads and line comments (\`gh api repos/${pr.repo}/pulls/${pr.number}/comments\`). Address each unresolved requested change in code, or explain in your report why it cannot be addressed; post no replies.`,
+    "4. Rerun the targeted checks, then the repository's tests, lint and build. Report any failure you could not reproduce or verify.",
+    "5. Local commits on the PR's branch per the Rules. I'll push myself after reviewing.",
     "",
     ...RULES, "", ...REPORT,
   ].join("\n");

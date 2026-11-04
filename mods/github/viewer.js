@@ -5,7 +5,7 @@ import { split, want, avatar } from "./media.js";
 import { entries, tally, loginOf } from "./timeline.js";
 import { primer, glyph, spinner, ago, openUrl, issueState, prState, checksOf, runState, glyphOf, labelChip, button, badge, segmented } from "./ui.js";
 import { ghJson, gh, localState } from "./gh.js";
-import { issueBrief, prBrief } from "./brief.js";
+import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
 import { copied, pickAgent, copyMenu, setWork, liveAgents, workOf } from "./actions.js";
 import { STAGES, stageOf } from "./work.js";
 
@@ -123,13 +123,18 @@ export class Viewer {
     cx.notify();
   }
 
-  brief() {
+  brief(mode = "fix") {
     const local = this.local() ? { ...this.local(), ...this.localState } : null;
-    return this.pr() ? prBrief(this.item, { local }) : issueBrief(this.item, { local });
+    return this.pr() ? (mode === "review" ? prReviewBrief : prFixBrief)(this.item, { local }) : issueBrief(this.item, { local });
   }
-  startAgent() {
+  copyBrief(cx) {
+    if (this.pr()) return copyMenu([["Copy review brief", this.brief("review"), "Review · read-only"], ["Copy fix brief", this.brief("fix"), "Fix checks and requested changes"]]);
+    copied(cx, this.brief(), "Brief copied", `${this.repo}#${this.number} · ready to paste into an agent`);
+    setWork(this.key(), "doing", { by: "brief" });
+  }
+  startAgent(mode = "fix") {
     const local = this.local();
-    pickAgent({ name: `${this.pr() ? "PR " : ""}#${this.number} ${this.repo.split("/")[1]}`, ref: this.key(), work: workOf(this.item, this.kind), brief: this.brief(), folder: local?.folder ?? null, space: local?.space ?? null });
+    pickAgent({ name: `${this.pr() ? `${mode === "review" ? "Review" : "Fix"} PR ` : ""}#${this.number} ${this.repo.split("/")[1]}`, ref: this.key(), work: workOf(this.item, this.kind), brief: this.brief(mode), folder: local?.folder ?? null, space: local?.space ?? null });
   }
   checkout() {
     const folder = this.local()?.folder;
@@ -357,9 +362,10 @@ export class Viewer {
         .child(button("copy", "", t, () => copyMenu([["Copy link", i.url], ["Copy reference", `${this.repo}#${i.number}`], ["Copy number and title", `#${i.number} ${i.title}`]]), { icon: "copy", tooltip: "Copy link or reference" }))
         .child(button("github", "", t, () => openUrl(i.url), { icon: "external", tooltip: "Open on GitHub" }))
         .when(pr && this.open(), (x) => x.child(button("checkout", "Checkout", t, () => this.checkout(), { icon: "terminal", tooltip: "gh pr checkout in a new tab" })))
-        .child(button("brief", "Copy brief", t, (_e, cx) => { copied(cx, this.brief(), "Brief copied", `${this.repo}#${i.number} · ready to paste into an agent`); setWork(this.key(), "doing", { by: "brief" }); }, { icon: "brief", enabled: i.body !== undefined, tooltip: i.body === undefined ? "Loading the issue first" : null }))
+        .child(button("brief", "Copy brief", t, (_e, cx) => this.copyBrief(cx), { icon: "brief", enabled: i.body !== undefined, tooltip: i.body === undefined ? "Loading the issue first" : null }))
         // The row the dialog opened on has no body: a brief from it would miss the description and comments.
-        .child(button("agent", "Start agent", t, () => this.startAgent(), { primary: true, icon: "agent", enabled: i.body !== undefined })))
+        .when(pr, (x) => x.child(button("review", "Review", t, () => this.startAgent("review"), { icon: "brief", enabled: i.body !== undefined, tooltip: "Start a read-only review" })))
+        .child(button("agent", pr ? "Fix" : "Start agent", t, () => this.startAgent(), { primary: true, icon: "agent", enabled: i.body !== undefined })))
       .child(button("close-dialog", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" }));
   }
 
