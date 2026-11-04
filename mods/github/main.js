@@ -3,7 +3,7 @@ import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui
 import { spaces, panes, focused, agents, run, layout, theme, openOverlay, closeOverlay, notify, props, shared, setShared, nextCommand } from "herdr";
 import { primer, glyph, spinner, ago, day, openUrl, issueState, prState, runState, checksOf, glyphOf, labelChip, button, counter, blankslate, skeleton, badge } from "./ui.js";
 import { gh, ghJson, account, repoOf, checkouts, load, localState, ROOTS } from "./gh.js";
-import { issueBrief, prBrief } from "./brief.js";
+import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
 import { Board, renderStageMenu } from "./board.js";
@@ -194,27 +194,32 @@ export default class GitHub extends View {
     openOverlay({ mod: "github", kind: "dialog", width: 0.8, height: 0.88, props: { run: { run: r, local: l ? { folder: l.folder, space: l.space ?? null } : null } } });
   }
   // Full detail first, so the brief has the body, the discussion and the checks.
-  async brief(item, kind) {
+  async brief(item, kind, mode = "fix") {
     const fields = kind === "pr"
       ? "number,title,body,author,state,labels,assignees,comments,url,headRefName,baseRefName,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,reviews,closingIssuesReferences,milestone"
       : "number,title,body,author,state,labels,assignees,comments,url,milestone";
     const full = { ...await ghJson([kind === "pr" ? "pr" : "issue", "view", String(item.number), "-R", item.repo, "--json", fields]), repo: item.repo };
     if (kind === "pr") full.checks = checksOf(full);
     const l = this.locals[item.repo], local = l ? { ...l, ...(await localState(l.folder) ?? {}) } : null;
-    return kind === "pr" ? prBrief(full, { local }) : issueBrief(full, { local });
+    if (kind !== "pr") return issueBrief(full, { local });
+    if (mode === "copy") return [["Copy review brief", prReviewBrief(full, { local }), "Review · read-only"], ["Copy fix brief", prFixBrief(full, { local }), "Fix checks and requested changes"]];
+    return mode === "review" ? prReviewBrief(full, { local }) : prFixBrief(full, { local });
   }
   copyBrief(item, kind, cx) {
     notify({ title: "Preparing brief…", body: `${item.repo}#${item.number}`, timeout: 1500 });
     cx.spawn(async (cx) => {
-      try { copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`); setWork(ref(item), "doing", { by: "brief" }); }
+      try {
+        if (kind === "pr") copyMenu(await this.brief(item, kind, "copy"));
+        else { copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`); setWork(ref(item), "doing", { by: "brief" }); }
+      }
       catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });
   }
-  startAgent(item, kind, cx) {
+  startAgent(item, kind, cx, mode = "fix") {
     cx.spawn(async () => {
       try {
         const l = this.locals[item.repo];
-        pickAgent({ name: `${kind === "pr" ? "PR " : ""}#${item.number} ${item.repo.split("/")[1]}`, ref: ref(item), brief: await this.brief(item, kind), folder: l?.folder ?? null, space: l?.space ?? null });
+        pickAgent({ name: `${kind === "pr" ? `${mode === "review" ? "Review" : "Fix"} PR ` : ""}#${item.number} ${item.repo.split("/")[1]}`, ref: ref(item), brief: await this.brief(item, kind, mode), folder: l?.folder ?? null, space: l?.space ?? null });
       } catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });
   }
@@ -236,7 +241,8 @@ export default class GitHub extends View {
   rowActions(item, kind, t) {
     return h_flex().flex_none().gap(2).items_center()
       .child(button(`brief-${kind}-${item.repo}-${item.number}`, "", t, (_e, cx) => this.copyBrief(item, kind, cx), { icon: "brief", invisible: true, small: true, tooltip: "Copy agent brief" }))
-      .child(button(`agent-${kind}-${item.repo}-${item.number}`, "", t, (_e, cx) => this.startAgent(item, kind, cx), { icon: "agent", invisible: true, small: true, tooltip: "Start an agent on it" }));
+      .when(kind === "pr", (e) => e.child(button(`review-${item.repo}-${item.number}`, "Review", t, (_e, cx) => this.startAgent(item, kind, cx, "review"), { invisible: true, small: true, tooltip: "Start a read-only review" })))
+      .child(button(`agent-${kind}-${item.repo}-${item.number}`, kind === "pr" ? "Fix" : "", t, (_e, cx) => this.startAgent(item, kind, cx), { icon: "agent", invisible: true, small: true, tooltip: kind === "pr" ? "Fix checks and requested changes" : "Start an agent on it" }));
   }
 
   itemRow(item, kind, t) {
