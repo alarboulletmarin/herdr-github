@@ -1,6 +1,6 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
-import { spaces, panes, focused, theme, props, shared, openOverlay, closeOverlay, notify, watchFolder, nextCommand } from "herdr";
+import { spaces, panes, focused, theme, props, shared, setShared, openOverlay, closeOverlay, notify, watchFolder, nextCommand } from "herdr";
 import { Repo } from "./git.js";
 import { fileState, treeRows, folderCheck, syncAction } from "./parse.js";
 import { glyph, spinner, button, checkbox, letterColor, under, ask, confirm, MONO } from "./ui.js";
@@ -30,7 +30,7 @@ export default class Git extends View {
     if (p.confirm) { this.confirming = { ...p.confirm, overlay: p.overlay }; return; }
 
     this.st = null; this.view = remembered("view", "tree"); this.collapsed = new Set(); this.amend = false;
-    this.doneAt = shared("git.do")?.at;
+    this.doneId = shared("git.do")?.id;
     this.box = TextareaState.new({ placeholder: "Commit message (Ctrl+Enter)" });
     this.box.set_auto_grow(2, 8);
     this.box.on("change", (_e, cx) => { const any = Boolean(this.box.value().trim()); if (any !== this.typed) { this.typed = any; cx.notify(); } });
@@ -207,7 +207,17 @@ export default class Git extends View {
 
     if (where() !== this.context) this.refresh(cx);
     const asked = shared("git.do");
-    if (asked?.at && asked.at !== this.doneAt) { this.doneAt = asked.at; if (asked.root === this.repo?.root) cx.spawn(async (cx) => this.perform(asked, cx)); } // never notify from render
+    if (asked?.id && asked.id !== this.doneId) {
+      this.doneId = asked.id;
+      // Two copies on one repository (the side panel and a pane) both see the request: the first to claim
+      // it runs it. Check and claim happen before any await, out of render (no notify or setShared there).
+      // ponytail: relies on mod copies sharing one script thread; separate runtimes would need an ack from the doer.
+      if (asked.root === this.repo?.root) cx.spawn(async (cx) => {
+        if (shared("git.claimed") === asked.id) return;
+        setShared("git.claimed", asked.id);
+        this.perform(asked, cx);
+      });
+    }
 
     const shell = v_flex().id("git").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13);
     if (!this.repo) return shell.child(this.title(t, null)).child(div().p(14).text_color(t.dim).child(this.error ?? (this.repo === null ? "Not a git repository. Focus a terminal inside one." : "Looking for a repository…")));

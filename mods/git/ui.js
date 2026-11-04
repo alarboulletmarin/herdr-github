@@ -39,7 +39,7 @@ export function checkbox(id, state, t, onClick) {
 }
 
 // Popups and dialogs ask the panel to act through shared("git.do"), so the work outlives them.
-export function ask(root, action, arg = null) { setShared("git.do", { at: Date.now(), root, action, arg }); }
+export function ask(root, action, arg = null) { setShared("git.do", { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, at: Date.now(), root, action, arg }); }
 // Asks before throwing work away; the panel does it on a click of `yes`.
 export function confirm(title, detail, root, action, arg, yes) {
   openOverlay({ mod: "git", kind: "dialog", modal: true, width: 420, height: 190, props: { confirm: { title, detail, root, action, arg, yes } } });
