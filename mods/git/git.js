@@ -59,6 +59,26 @@ export class Repo {
     const names = staged && orig ? ["-M", "--", orig, path] : ["--", path];
     return parseDiff(await this.read(["diff", ...(staged ? ["--cached"] : []), "--src-prefix=a/", "--dst-prefix=b/", "--no-ext-diff", "--no-textconv", "--no-color", ...names]));
   }
+  // The preview and the commit choose the same scope; Amend never picks up unstaged edits.
+  async nextCommit(amend = false) {
+    const { branch, files } = await this.status();
+    if (files.some((f) => f.conflict)) throw new Error("Resolve conflicts before committing");
+    const tracked = !amend && !files.some((f) => !f.untracked && f.x !== ".");
+    const base = tracked ? (branch.oid ? ["HEAD"] : []) : ["--cached"];
+    const changes = await Promise.all(files.filter((f) => !f.untracked && (tracked || f.x !== ".")).map(async (f) => {
+      const diff = parseDiff(await this.read(["diff", ...base, "-M", "--src-prefix=a/", "--dst-prefix=b/", "--no-ext-diff", "--no-textconv", "--no-color", "--", ...(f.orig ? [f.orig] : []), f.path]));
+      // Count this patch, not status()'s HEAD-to-worktree totals (a partly staged file has two versions).
+      const lines = diff.hunks.flatMap((h) => h.lines);
+      return { path: f.path, orig: f.orig ?? null, diff, add: lines.filter((l) => l.startsWith("+")).length, del: lines.filter((l) => l.startsWith("-")).length, binary: diff.header.some((l) => l.startsWith("Binary files ")) };
+    }));
+    return { tracked, files: changes };
+  }
+  async commit(message, amend = false) {
+    const { files } = await this.status();
+    const staged = files.some((f) => !f.untracked && f.x !== ".");
+    if (!staged && !amend && !files.some((f) => !f.untracked)) throw new Error("No tracked changes to commit");
+    return this.run(["commit", ...(staged || amend ? [] : ["-a"]), ...(amend ? ["--amend"] : []), ...(message ? ["-m", message] : ["--no-edit"])]);
+  }
   // The stash at ref, only if it is still the one the person picked.
   async stashRef(ref, oid) {
     const now = (await this.read(["rev-parse", "--verify", "-q", ref]).catch(() => "")).trim();
