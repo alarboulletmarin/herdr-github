@@ -1,7 +1,15 @@
 import { v_flex, h_flex } from "gpui-base";
 import { div, svg, image } from "gpui-kit";
-import { run, notify, openOverlay, closeOverlay, knownAgents, spaces } from "herdr";
+import { run, notify, openOverlay, closeOverlay, knownAgents, spaces, shared, setShared } from "herdr";
 import { glyph, under } from "./ui.js";
+import { marked } from "./work.js";
+
+// Records what is being done about owner/repo#N (work.js). A stage you set by hand is never overwritten by a brief or an agent.
+export function setWork(key, stage, extra = { by: "hand" }) {
+  const marks = shared("github.work") ?? {};
+  if (extra.by !== "hand" && marks[key]?.by === "hand") return;
+  setShared("github.work", marked(marks, key, stage, extra));
+}
 
 export function copied(cx, text, title, body) {
   cx.write_to_clipboard(text);
@@ -14,8 +22,9 @@ export function pickAgent(task) {
 }
 
 // Starts the agent in a new tab, in the clone's space when there is one, with the brief as its first message.
-export function launch(agent, { name, brief, folder, space }) {
+export function launch(agent, { name, brief, folder, space, ref }) {
   const args = { name: name.slice(0, 48), argv: agent.run, task: brief };
+  if (ref) setWork(ref, "doing", { by: "agent", tab: args.name });
   const home = space ?? spaces().find((s) => !s.machine && folder && s.folder === folder)?.id ?? spaces().find((s) => s.active)?.id;
   if (home) args.space = home;
   if (folder) args.folder = folder;

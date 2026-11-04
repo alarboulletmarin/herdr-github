@@ -1,14 +1,16 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, hc, run, layout, theme, openOverlay, closeOverlay, notify, props, shared, setShared, nextCommand } from "herdr";
+import { spaces, panes, focused, agents, run, layout, theme, openOverlay, closeOverlay, notify, props, shared, setShared, nextCommand } from "herdr";
 import { primer, glyph, spinner, ago, day, openUrl, issueState, prState, runState, checksOf, glyphOf, labelChip, button, counter, blankslate, skeleton, badge } from "./ui.js";
 import { gh, ghJson, account, repoOf, checkouts, load, localState, ROOTS } from "./gh.js";
 import { issueBrief, prBrief } from "./brief.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
-import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu } from "./actions.js";
+import { Board, renderStageMenu } from "./board.js";
+import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork } from "./actions.js";
+import { stageOf, ref } from "./work.js";
 
-const PAGE = 50, SYNC = 60000, LIVE = 10000, SCAN = 4000;
+const PAGE = 50, SYNC = 60000, LIVE = 10000;
 const TABS = {
   issues: { label: "Issues", icon: "issue-open" },
   prs: { label: "Pull requests", short: "PRs", icon: "pr-open" },
@@ -45,10 +47,12 @@ function location(last) {
   if (pane && !pane.terminal && last) return last;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on: space?.machine ?? null, space: f?.space ?? space?.id };
 }
-function mentions(text, repo) {
-  const found = [], re = new RegExp(`(?:^|[^\\w&/#])#(\\d{1,5})(?![\\w-])|github\\.com/${repo.replace(/\./g, "\\.")}/(?:issues|pull)/(\\d+)`, "g");
-  for (const line of text.split("\n").reverse()) for (const m of line.matchAll(re)) { const n = Number(m[1] ?? m[2]); if (!found.includes(n)) found.push(n); }
-  return found;
+
+// In progress / In review on a row: why, in the stage's color (work.js).
+function stagePill({ stage, why, agent }, p, t) {
+  const color = stage === "review" ? p.link : agent?.status === "blocked" ? p.closed : p.attention;
+  return h_flex().h(18).px(6).gap(4).flex_none().items_center().rounded(9).border_1().border_color(`${color}66`).bg(`${color}1a`).text_size(10.5).font_semibold().text_color(color)
+    .child(agent?.status === "working" ? spinner(10, color) : glyph(stage === "review" ? "pr-open" : agent ? "agent" : "clock", 10, color)).child(why);
 }
 
 export default class GitHub extends View {
@@ -56,17 +60,21 @@ export default class GitHub extends View {
     const pr = props() ?? {};
     if (pr.item) { this.viewer = new Viewer(pr.item, pr.overlay, cx); return; }
     if (pr.run) { this.runView = new RunView(pr.run, pr.overlay, cx); return; }
+    if (pr.board) { this.board = new Board(pr.board, pr.overlay, cx); return; }
+    if (pr.stageMenu) { this.stageMenu = { spec: pr.stageMenu, overlay: pr.overlay }; return; }
     if (pr.agentMenu) { this.agentMenu = new AgentMenu(pr.agentMenu, pr.overlay, cx); return; }
     if (pr.copyMenu) { this.copying = { items: pr.copyMenu, overlay: pr.overlay }; return; }
     if (pr.picker) { this.initPicker(pr.picker, pr.overlay, cx); return; }
     if (pr.create) { this.initCreate(pr.create, pr.overlay, cx); return; }
 
+    // d: lists held whole bodies and a number in `comments` (the dialog wants the array): drop them.
+    try { for (let n = localStorage.length; n--;) { const k = localStorage.key(n); if (k?.startsWith("d:")) localStorage.removeItem(k); } } catch { /* no key(): they stay */ }
     this.fixed = pr.repo ?? null; // a pane copy fixed on one repository: { "mod": "github", "props": { "repo": "owner/name" } }
     this.roots = Array.isArray(pr.roots) ? pr.roots : []; // more folders holding clones: { "props": { "roots": ["Documents/work"] } }
     this.repos = remembered("repos"); this.pins = remembered("pins"); this.spaceRepos = remembered("spaces");
     this.tab = shared("github.tab") ?? "issues";
     this.f = remembered("filters", null) ?? { issues: { state: "open", mine: false }, prs: { state: "open", mine: false }, actions: { failing: false, branch: false }, milestones: { state: "open" } };
-    this.limit = PAGE; this.data = {}; this.locals = {}; this.counts = remembered("counts"); this.mentioned = []; this.query = "";
+    this.limit = PAGE; this.data = {}; this.locals = {}; this.counts = remembered("counts"); this.query = "";
     this.input = InputState.new({ placeholder: "Filter by title, number, label, author…" });
     this.input.on("change", (_e, cx) => { this.query = this.input.value(); this.limit = PAGE; cx.notify(); });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
@@ -79,7 +87,6 @@ export default class GitHub extends View {
     });
     cx.timer.every(SYNC, (cx) => { if (!hidden()) this.refresh(cx, true); });
     cx.timer.every(LIVE, (cx) => { if (!hidden() && this.tab === "actions" && this.items()?.some((r) => r.status !== "completed")) this.refresh(cx, true); });
-    cx.timer.every(SCAN, (cx) => { if (!hidden()) this.scan(cx); });
     // keys.json: "alt-g i": "github.issues", or github.prs|actions|milestones|projects|repo|repos|refresh|open|switch|all|follow.
     cx.spawn(async (cx) => {
       for (;;) {
@@ -88,6 +95,7 @@ export default class GitHub extends View {
         else if (c === "refresh") this.refresh(cx);
         else if (c === "open") this.openFirst();
         else if (c === "switch" && !this.fixed) this.openPicker();
+        else if (c === "board" && this.repo() && !this.all()) this.openBoard();
         else if (c === "all" || c === "follow") this.setPin(this.where().space, c === "all" ? "all" : null, cx);
         cx.notify();
       }
@@ -114,8 +122,8 @@ export default class GitHub extends View {
     if (tab === "actions") f.branch = f.branch ? this.locals[this.repo()]?.branch ?? null : null;
     return f;
   }
-  key(tab = this.shownTab(), f = this.filters(tab)) { return `${this.scopeKey()}|${tab}|${JSON.stringify(f)}`; }
-  entry(key = this.key()) { return (this.data[key] ??= { items: remembered(`d:${key}`, null), at: 0 }); }
+  key(tab = this.shownTab(), f = this.filters(tab)) { return `${this.scopeKey()}|${tab}|${JSON.stringify(f, (_k, v) => v ?? undefined)}`; }
+  entry(key = this.key()) { return (this.data[key] ??= { items: remembered(`d2:${key}`, null), at: 0 }); }
   items() { return this.entry().items; }
 
   // The focused terminal's repo, by its origin remote. A terminal outside any repo means none:
@@ -126,7 +134,7 @@ export default class GitHub extends View {
     const id = JSON.stringify([cwd, on]);
     if (!(id in this.repos)) { this.repos[id] = await repoOf(cwd, on); keep("repos", this.repos); }
     const found = this.repos[id] ?? null;
-    if ((this.spaceRepos[space] ?? null) !== found) { this.spaceRepos[space] = found; keep("spaces", this.spaceRepos); this.mentioned = []; }
+    if ((this.spaceRepos[space] ?? null) !== found) { this.spaceRepos[space] = found; keep("spaces", this.spaceRepos); }
   }
 
   refresh(cx, quiet = false) {
@@ -143,7 +151,7 @@ export default class GitHub extends View {
         const f = this.filters(tab), real = this.key(tab, f), got = await load[tab](scope, f);
         const target = this.entry(real);
         target.items = got; target.at = Date.now(); target.error = null;
-        if (["issues", "prs", "actions", "milestones", "repos"].includes(tab)) keep(`d:${real}`, got.slice(0, 200));
+        if (["issues", "prs", "actions", "milestones", "repos"].includes(tab)) keep(`d2:${real}`, got.slice(0, 200));
         if ((tab === "issues" || tab === "prs") && f.state === "open" && !f.mine && !f.milestone) this.setCount(tab, got);
       } catch (err) { e.error = String(err?.message ?? err); e.scope = /read:project|scopes?/.test(e.error); }
       finally { e.loading = false; cx.notify(); }
@@ -169,32 +177,17 @@ export default class GitHub extends View {
     if (local?.folder) Object.assign(local, await localState(local.folder) ?? {});
   }
 
-  // #123 and issue links on the focused terminal, pinned on top.
-  scan(cx) {
-    const terminal = (this.terminal = focused()?.terminal ?? this.terminal), repo = this.repo();
-    if (this.scanning || !terminal || !repo || this.all() || !["issues", "prs"].includes(this.shownTab())) return;
-    this.scanning = true;
-    cx.spawn(async (cx) => {
-      try {
-        const r = await hc(["read", terminal, "--lines", "300"]);
-        if (r.code !== 0) return;
-        const found = mentions(r.stdout, repo).slice(0, 12);
-        if (JSON.stringify(found) !== JSON.stringify(this.mentioned)) { this.mentioned = found; cx.notify(); }
-      } catch { /* terminal gone */ } finally { this.scanning = false; }
-    });
-  }
-
   setTab(tab, cx) { this.tab = tab; this.limit = PAGE; setShared("github.tab", tab); this.refresh(cx); cx.notify(); }
   setFilter(tab, patch, cx) { this.limit = PAGE; this.f[tab] = { ...this.f[tab], ...patch }; keep("filters", this.f); this.refresh(cx); cx.notify(); }
   setPin(space, value, cx) {
     if (value) this.pins[space] = value; else delete this.pins[space];
-    keep("pins", this.pins); this.mentioned = []; this.refresh(cx); cx.notify();
+    keep("pins", this.pins); this.refresh(cx); cx.notify();
   }
 
   // ---- opening things ----
   localFor(repo) { const l = this.locals[repo]; return l ? { [repo]: { folder: l.folder, space: l.space ?? null } } : {}; }
   open(item, kind) {
-    openOverlay({ mod: "github", kind: "dialog", width: 0.88, height: 0.92, props: { item: { kind, repo: item.repo, number: item.number, me: this.account?.login, locals: this.localFor(item.repo), data: kind === "pr" ? null : item.body !== undefined ? item : null } } });
+    openOverlay({ mod: "github", kind: "dialog", width: 0.88, height: 0.92, props: { item: { kind, repo: item.repo, number: item.number, me: this.account?.login, locals: this.localFor(item.repo), data: kind === "pr" ? null : item } } });
   }
   openRun(r) {
     const l = this.locals[r.repo];
@@ -213,7 +206,7 @@ export default class GitHub extends View {
   copyBrief(item, kind, cx) {
     notify({ title: "Preparing brief…", body: `${item.repo}#${item.number}`, timeout: 1500 });
     cx.spawn(async (cx) => {
-      try { copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`); }
+      try { copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`); setWork(ref(item), "doing", { by: "brief" }); }
       catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });
   }
@@ -221,16 +214,16 @@ export default class GitHub extends View {
     cx.spawn(async () => {
       try {
         const l = this.locals[item.repo];
-        pickAgent({ name: `${kind === "pr" ? "PR " : ""}#${item.number} ${item.repo.split("/")[1]}`, brief: await this.brief(item, kind), folder: l?.folder ?? null, space: l?.space ?? null });
+        pickAgent({ name: `${kind === "pr" ? "PR " : ""}#${item.number} ${item.repo.split("/")[1]}`, ref: ref(item), brief: await this.brief(item, kind), folder: l?.folder ?? null, space: l?.space ?? null });
       } catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });
   }
-  // The top row: the issue the terminal mentioned last, else the first of the list.
+  // The list's first row.
   openFirst() {
     const tab = this.shownTab(), items = this.items() ?? [];
     if (tab === "actions") return items[0] && this.openRun(items[0]);
     if (tab !== "issues" && tab !== "prs") return;
-    const item = this.mentioned.map((n) => items.find((i) => i.number === n)).find(Boolean) ?? items[0];
+    const item = items[0];
     if (item) this.open(item, tab === "prs" ? "pr" : "issue");
   }
   copyItem(item) {
@@ -246,12 +239,13 @@ export default class GitHub extends View {
       .child(button(`agent-${kind}-${item.repo}-${item.number}`, "", t, (_e, cx) => this.startAgent(item, kind, cx), { icon: "agent", invisible: true, small: true, tooltip: "Start an agent on it" }));
   }
 
-  itemRow(item, kind, t, where = "list") {
-    const p = primer(t), key = `${where}-${kind}-${item.repo}-${item.number}`, hovered = this.hover === key;
+  itemRow(item, kind, t) {
+    const p = primer(t), key = `${kind}-${item.repo}-${item.number}`, hovered = this.hover === key;
     const [g, color] = kind === "pr" ? prState(item, p) : issueState(item, p);
     const checks = kind === "pr" && item.statusCheckRollup ? checksOf(item) : null;
     const meta = [`#${item.number}`, this.all() ? item.repo.split("/")[1] : null, kind === "pr" && item.headRefName ? item.headRefName : null, `${String(item.state).toUpperCase() === "OPEN" ? "opened" : "updated"} ${ago(String(item.state).toUpperCase() === "OPEN" ? item.createdAt : item.updatedAt)}`, item.author?.login ? `by ${item.author.login.replace(/^app\//, "")}` : null].filter(Boolean).join(" · ");
     const review = { APPROVED: ["check", p.open, "Approved"], CHANGES_REQUESTED: ["x-circle", p.closed, "Changes requested"] }[item.reviewDecision];
+    const s = stageOf(item, this.work[ref(item)], this.agentsNow, kind), work = s.stage === "doing" || (s.stage === "review" && kind === "issue") ? s : null;
     return this.hoverable(h_flex().id(key).relative().flex_none().px(12).py(9).gap(10).items_start().border_b(1).border_color(t.border).cursor_pointer()
       .bg(hovered ? t.hover : "#00000000")
       .on_click(() => this.open(item, kind))
@@ -266,7 +260,8 @@ export default class GitHub extends View {
         .child(h_flex().gap(8).items_center().text_size(11.5).text_color(t.muted)
             .when(Boolean(checks?.state), (e) => e.child(glyphOf(checks.state === "failure" ? "x-circle" : checks.state === "pending" ? "dot" : "check", 14, checks.state === "failure" ? p.closed : checks.state === "pending" ? p.attention : p.open, t)))
             .when(Boolean(review), (e) => e.child(glyph(review[0], 14, review[1])))
-            .when(item.comments > 0, (e) => e.child(h_flex().gap(3).items_center().child(glyph("comment", 13, t.muted)).child(String(item.comments)))))
+            .when(item.commentCount > 0, (e) => e.child(h_flex().gap(3).items_center().child(glyph("comment", 13, t.muted)).child(String(item.commentCount)))))
+        .when(Boolean(work), (e) => e.child(stagePill(work, p, t)))
         .when(item.assignees?.length > 0, (e) => e.child(div().text_size(11).text_color(t.dim).child(item.assignees.map((a) => a.login).join(", ")))))
       // Over the row's corner, so showing them never moves the text.
       .when(hovered, (e) => e.child(div().absolute().top(5).right(8).p(2).rounded(7).bg(t.raised).border_1().border_color(t.border).child(this.rowActions(item, kind, t)))), key);
@@ -404,11 +399,7 @@ export default class GitHub extends View {
       case "issues": case "prs": {
         const kind = tab === "prs" ? "pr" : "issue";
         const shown = items.filter((i) => this.matches(`#${i.number} ${i.title} ${i.repo} ${i.author?.login ?? ""} ${(i.labels ?? []).map((l) => l.name).join(" ")}`));
-        const pinned = this.all() ? [] : this.mentioned.map((n) => items.find((i) => i.number === n)).filter(Boolean).slice(0, 6);
-        rows = [
-          ...(pinned.length ? [this.heading("In this terminal", t), ...pinned.map((i) => this.itemRow(i, kind, t, "mention")), this.heading(this.all() ? "Everything" : "All", t)] : []),
-          ...shown.slice(0, this.limit).map((i) => this.itemRow(i, kind, t)),
-        ];
+        rows = shown.slice(0, this.limit).map((i) => this.itemRow(i, kind, t));
         if (!shown.length) rows.push(this.empty(tab, e, t, items.length > 0));
         else if (shown.length > this.limit) rows.push(this.more(shown.length, t));
         else if (items.length >= 200) rows.push(div().px(12).py(10).text_size(11.5).text_color(t.dim).child("Showing the 200 most recent. Filter or open GitHub for the rest."));
@@ -433,7 +424,6 @@ export default class GitHub extends View {
   more(total, t) {
     return h_flex().flex_none().py(10).justify_center().child(button("more", `Show ${Math.min(PAGE, total - this.limit)} more · ${total - this.limit} left`, t, (_e, cx) => { this.limit += PAGE; cx.notify(); }, { small: true }));
   }
-  heading(label, t) { return div().flex_none().px(12).pt(10).pb(6).text_size(11).font_semibold().text_color(t.dim).border_b(1).border_color(t.border).child(label); }
 
   repoBody(t, cx) {
     const repo = this.repo(), e = this.entry(), r = e.items, p = primer(t), local = this.locals[repo];
@@ -500,7 +490,8 @@ export default class GitHub extends View {
         .child(glyph("chevron-down", 14, t.muted))
         .when(pinned && !all, (x) => x.child(div().flex_none().text_size(10.5).text_color(t.dim).child("pinned"))))
       .child(e.loading ? div().px(7).child(spinner(14, t.muted)) : button("refresh", "", t, (_e, cx) => this.refresh(cx), { icon: "refresh", invisible: true, tooltip: "Refresh" }))
-      .when(Boolean(repo) && !all, (x) => x.child(button("new-issue", "", t, () => this.create(), { icon: "plus", invisible: true, tooltip: "New issue" }))
+      .when(Boolean(repo) && !all, (x) => x.child(button("board", "", t, () => this.openBoard(), { icon: "project", invisible: true, tooltip: "Board: To do, In progress, In review, Done" }))
+        .child(button("new-issue", "", t, () => this.create(), { icon: "plus", invisible: true, tooltip: "New issue" }))
         .child(button("open-gh", "", t, () => openUrl(`https://github.com/${repo}${{ issues: "/issues", prs: "/pulls", actions: "/actions", milestones: "/milestones", projects: "/projects" }[this.shownTab()] ?? ""}`), { icon: "external", invisible: true, tooltip: "Open on GitHub" })));
   }
 
@@ -536,6 +527,8 @@ export default class GitHub extends View {
     this.here = null;
     if (this.viewer) return this.viewer.render(cx);
     if (this.runView) return this.runView.render(cx);
+    if (this.board) return this.board.render(cx);
+    if (this.stageMenu) return renderStageMenu(this.stageMenu.spec, this.stageMenu.overlay, t);
     if (this.agentMenu) return this.agentMenu.render(cx, t);
     if (this.copying) return renderCopyMenu(this.copying.items, this.copying.overlay, t);
     if (this.picker) return this.renderPicker(t);
@@ -544,6 +537,8 @@ export default class GitHub extends View {
     const away = hidden(), ctx = JSON.stringify([this.where().cwd, this.where().space]);
     if ((this.away && !away) || (!away && ctx !== this.ctx)) { this.ctx = ctx; this.refresh(cx, true); }
     this.away = away;
+    if (away && !this.fixed) return this.shell(t); // hidden() reads the side panel: a pane fixed on a repository draws anyway
+    this.work = shared("github.work") ?? {}; this.agentsNow = agents();
     const changed = shared("github.changed");
     if (changed?.at && changed.at !== this.changedAt) { this.changedAt = changed.at; this.refresh(cx, true); }
     const picked = shared("github.pick");
@@ -613,6 +608,7 @@ export default class GitHub extends View {
   }
 
   // ---- new issue (a dialog of this mod) ----
+  openBoard() { openOverlay({ mod: "github", kind: "dialog", width: 0.94, height: 0.9, props: { board: { repo: this.repo(), me: this.account?.login, locals: this.localFor(this.repo()) } } }); }
   create() { openOverlay({ mod: "github", kind: "dialog", modal: true, width: 640, height: 480, props: { create: { repo: this.repo(), me: this.account?.login, locals: this.localFor(this.repo()) } } }); }
   initCreate(spec, overlay, cx) {
     this.form = { ...spec, overlay };

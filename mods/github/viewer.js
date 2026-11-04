@@ -1,12 +1,13 @@
 import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
-import { theme, closeOverlay, setShared, run } from "herdr";
+import { theme, closeOverlay, setShared, shared, agents, run } from "herdr";
 import { split, want, avatar } from "./media.js";
 import { entries, tally, loginOf } from "./timeline.js";
 import { primer, glyph, spinner, ago, openUrl, issueState, prState, checksOf, runState, glyphOf, labelChip, button, badge, segmented } from "./ui.js";
 import { ghJson, gh, localState } from "./gh.js";
 import { issueBrief, prBrief } from "./brief.js";
-import { copied, pickAgent, copyMenu } from "./actions.js";
+import { copied, pickAgent, copyMenu, setWork } from "./actions.js";
+import { STAGES, stageOf } from "./work.js";
 
 const FIELDS = {
   issue: "number,title,body,author,state,stateReason,labels,assignees,createdAt,updatedAt,comments,url,milestone,closedByPullRequestsReferences,reactionGroups",
@@ -128,7 +129,7 @@ export class Viewer {
   }
   startAgent() {
     const local = this.local();
-    pickAgent({ name: `${this.pr() ? "PR " : ""}#${this.number} ${this.repo.split("/")[1]}`, brief: this.brief(), folder: local?.folder ?? null, space: local?.space ?? null });
+    pickAgent({ name: `${this.pr() ? "PR " : ""}#${this.number} ${this.repo.split("/")[1]}`, ref: this.key(), brief: this.brief(), folder: local?.folder ?? null, space: local?.space ?? null });
   }
   checkout() {
     const folder = this.local()?.folder;
@@ -302,7 +303,14 @@ export class Viewer {
 
     const mine = i.assignees.some((a) => a.login === me), labels = this.repoLabels[this.repo];
     const linked = pr ? i.closingIssuesReferences ?? [] : i.closedByPullRequestsReferences ?? [];
+    const mark = (shared("github.work") ?? {})[this.key()], s = stageOf(i, mark, agents(), this.kind);
+    const status = v_flex().gap(8)
+      .child(segmented("stage", STAGES.filter(([k]) => k !== "done"), mark?.by === "hand" ? mark.stage : null, t, (k, _cx) => setWork(this.key(), k)))
+      .child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
+        .child(div().flex_1().min_w(0).truncate().child(`${STAGES.find(([k]) => k === s.stage)[1]}${s.why ? ` · ${s.why}` : ""}`))
+        .when(Boolean(mark), (e) => e.child(link("stage-auto", mark.by === "hand" ? "Auto" : "Clear", () => setWork(this.key(), null)))));
     return v_flex().id("aside").w(268).flex_none().min_h(0).overflow_y_scrollbar().pl(8).pr(24).pt(6)
+      .child(part("Status", status))
       .when(pr, (e) => e.child(part("Reviewers", reviewers.size ? v_flex().gap(8).children([...reviewers].map(([login, state]) => person(login).child(verdictIcon(state)))) : quiet("No reviews"))))
       .when(pr && (i.checks?.runs.length ?? 0) > 0, (e) => e.child(part("Checks", v_flex().gap(4).children(i.checks.runs.slice(0, 14).map((c, n) => {
         const [icon, color] = runState(c, p);
@@ -349,8 +357,9 @@ export class Viewer {
         .child(button("copy", "", t, () => copyMenu([["Copy link", i.url], ["Copy reference", `${this.repo}#${i.number}`], ["Copy number and title", `#${i.number} ${i.title}`]]), { icon: "copy", tooltip: "Copy link or reference" }))
         .child(button("github", "", t, () => openUrl(i.url), { icon: "external", tooltip: "Open on GitHub" }))
         .when(pr && this.open(), (x) => x.child(button("checkout", "Checkout", t, () => this.checkout(), { icon: "terminal", tooltip: "gh pr checkout in a new tab" })))
-        .child(button("brief", "Copy brief", t, (_e, cx) => copied(cx, this.brief(), "Brief copied", `${this.repo}#${i.number} · ready to paste into an agent`), { icon: "brief" }))
-        .child(button("agent", "Start agent", t, () => this.startAgent(), { primary: true, icon: "agent" })))
+        .child(button("brief", "Copy brief", t, (_e, cx) => { copied(cx, this.brief(), "Brief copied", `${this.repo}#${i.number} · ready to paste into an agent`); setWork(this.key(), "doing", { by: "brief" }); }, { icon: "brief", enabled: i.body !== undefined, tooltip: i.body === undefined ? "Loading the issue first" : null }))
+        // The row the dialog opened on has no body: a brief from it would miss the description and comments.
+        .child(button("agent", "Start agent", t, () => this.startAgent(), { primary: true, icon: "agent", enabled: i.body !== undefined })))
       .child(button("close-dialog", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" }));
   }
 
@@ -363,7 +372,7 @@ export class Viewer {
       .when(pr, (e) => e.child(div().font_semibold().text_color(t.foreground).child(loginOf(i.author)))
         .child(div().child(upper(i.state) === "MERGED" ? "merged into" : "wants to merge into")).child(ref(i.baseRefName)).child(div().child("from")).child(ref(i.headRefName))
         .child(div().pl(6).text_color(p.open).child(`+${i.additions}`)).child(div().text_color(p.closed).child(`−${i.deletions}`)).child(div().child(`· ${i.changedFiles} files`)))
-      .when(!pr, (e) => e.child(div().child(`${loginOf(i.author)} opened ${ago(i.createdAt)} · ${(i.comments ?? []).length} comments`)));
+      .when(!pr, (e) => e.child(div().child(`${loginOf(i.author)} opened ${ago(i.createdAt)} · ${i.comments?.length ?? i.commentCount ?? 0} comments`)));
   }
 
   render(cx) {

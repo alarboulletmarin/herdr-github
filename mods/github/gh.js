@@ -54,20 +54,21 @@ export async function checkouts(extra = []) {
   return map;
 }
 
-const ISSUE = "number,title,body,url,state,stateReason,labels,assignees,author,createdAt,updatedAt,comments,milestone";
+const ISSUE = "number,title,url,state,stateReason,labels,assignees,author,createdAt,updatedAt,comments,milestone,closedByPullRequestsReferences";
 const SEARCH_ISSUE = "number,title,url,state,labels,assignees,author,createdAt,updatedAt,commentsCount,repository";
 const PR = "number,title,url,state,isDraft,labels,assignees,author,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,statusCheckRollup,comments,additions,deletions,mergedAt";
 const SEARCH_PR = "number,title,url,state,isDraft,labels,author,createdAt,updatedAt,commentsCount,repository";
 const RUN = "databaseId,number,displayTitle,status,conclusion,workflowName,headBranch,headSha,event,createdAt,updatedAt,startedAt,url,attempt";
 
 const repoName = (i) => i.repository?.nameWithOwner ?? i.repository?.fullName ?? null;
-const norm = (list, repo) => list.map((i) => ({ ...i, repo: repo ?? repoName(i), comments: i.comments?.length ?? i.commentsCount ?? 0 }));
+// The list keeps a count; `comments` stays the array the dialog and the briefs read.
+const norm = (list, repo) => list.map(({ comments, commentsCount, ...i }) => ({ ...i, repo: repo ?? repoName(i), commentCount: comments?.length ?? commentsCount ?? 0 }));
 
 // One loader per tab. `scope` is { repo } or { owners: [...] }, `q` the filters.
 export const load = {
-  async issues({ repo, owners }, { state, mine, milestone }) {
+  async issues({ repo, owners }, { state, mine, milestone, limit = 200 }) {
     if (repo) {
-      const args = ["issue", "list", "-R", repo, "--state", state, "--limit", "200", "--json", ISSUE];
+      const args = ["issue", "list", "-R", repo, "--state", state, "--limit", String(limit), "--json", ISSUE];
       if (mine) args.push("--assignee", "@me");
       if (milestone) args.push("--milestone", milestone);
       return norm(await ghJson(args), repo);
