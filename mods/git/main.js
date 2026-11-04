@@ -6,6 +6,7 @@ import { fileState, treeRows, folderCheck, syncAction } from "./parse.js";
 import { glyph, spinner, button, checkbox, letterColor, under, ask, confirm, MONO } from "./ui.js";
 import { Diff } from "./diff.js";
 import { History } from "./history.js";
+import { NextCommit } from "./next-commit.js";
 
 const ROWS = 400; // drawn at most; a bigger change set says how many more
 const remembered = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) ?? "null") ?? fallback; } catch { return fallback; } };
@@ -23,6 +24,7 @@ const where = () => JSON.stringify(location());
 export default class Git extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    if (p.nextCommit) { this.dialog = new NextCommit(p.nextCommit, p.overlay, cx); return; }
     if (p.diff) { this.dialog = new Diff(p.diff, p.overlay, cx); return; }
     if (p.history) { this.dialog = new History(p.history, p.overlay, cx); return; }
     if (p.menu) { this.menu = { ...p.menu, overlay: p.overlay }; return; }
@@ -102,12 +104,13 @@ export default class Git extends View {
   toggle(paths, check, cx) { this.act(check === "off" ? "Staging…" : "Unstaging…", cx, (r) => check === "off" ? r.stage(paths) : r.unstage(paths, this.hasHead(), this.st?.files ?? [])); }
 
   staged() { return (this.st?.files ?? []).filter((f) => fileState(f).check !== "off"); }
-  commit(cx) {
-    const message = this.box.value().trim(), staged = this.staged().length > 0;
-    if (!message && !this.amend) return;
-    if (!staged && !this.amend && !(this.st?.files ?? []).some((f) => !f.untracked)) return;
-    const args = ["commit", ...(staged || this.amend ? [] : ["-a"]), ...(this.amend ? ["--amend"] : []), ...(message ? ["-m", message] : ["--no-edit"])];
-    this.act(this.amend ? "Amending…" : "Committing…", cx, (r) => r.run(args), () => { this.box.set_value(""); this.typed = false; this.amend = false; });
+  commit(cx, { message = this.box.value(), amend = this.amend } = {}) {
+    message = message.trim();
+    if (!message && !amend) return;
+    this.act(amend ? "Amending…" : "Committing…", cx, (r) => r.commit(message, amend), () => {
+      if (this.box.value().trim() === message) { this.box.set_value(""); this.typed = false; }
+      this.amend = false;
+    });
   }
   // Amend starts from the last commit's message, as Zed does; unticking leaves the box alone.
   toggleAmend(cx) {
@@ -147,6 +150,7 @@ export default class Git extends View {
       case "apply": return this.act("Applying the stash…", cx, async (r) => r.run(["stash", "apply", await r.stashRef(arg.ref, arg.oid)]));
       case "drop": return this.act("Dropping the stash…", cx, async (r) => r.run(["stash", "drop", await r.stashRef(arg.ref, arg.oid)]));
       case "discard": { const f = file(arg); return f && this.act("Discarding…", cx, (r) => r.discard(f)); }
+      case "commit": return this.commit(cx, arg);
       case "uncommit": return this.uncommit(cx);
       case "refresh": return this.refresh(cx);
     }
@@ -155,6 +159,7 @@ export default class Git extends View {
   // ---- opening things ----
   spec() { return { root: this.repo.root, on: this.repo.on }; }
   openDiff(path) { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { diff: { ...this.spec(), path } } }); }
+  openNextCommit() { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { nextCommit: { ...this.spec(), message: this.box.value(), amend: this.amend } } }); }
   openHistory() { openOverlay({ mod: "git", kind: "dialog", width: 0.92, height: 0.9, props: { history: this.spec() } }); }
   openBranches() { openOverlay({ mod: "git", kind: "popup", width: 320, height: 420, at: under(320), props: { branches: { ...this.spec(), head: this.st?.branch.head } } }); }
   openMore() {
@@ -249,6 +254,7 @@ export default class Git extends View {
             .child(checkbox("amend-box", this.amend ? "on" : "off", t, (_e, cx) => { if (this.hasHead()) this.toggleAmend(cx); })).child("Amend"))
           .child(div().flex_1())
           .when(Boolean(this.busy), (e) => e.child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted).child(spinner(12, t.muted)).child(this.busy)))
+          .child(button("next-commit", "Preview", t, () => this.openNextCommit(), { icon: "diff", enabled: !this.busy && Boolean(st) && (this.amend || files.some((f) => !f.untracked)), tooltip: "Preview the next commit" }))
           .child(button("commit", commitLabel, t, (_e, cx) => this.commit(cx), { primary: true, icon: "commit", enabled: canCommit }))))
       .when(Boolean(st?.last), (e) => e.child(h_flex().flex_none().h(34).px(10).gap(8).items_center().border_t(1).border_color(t.border).text_size(12)
         .child(glyph("commit", 13, t.dim)).child(div().font_family(MONO).text_size(11).text_color(t.dim).child(st.last.short))

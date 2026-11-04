@@ -26,6 +26,86 @@ function repo(files = {}, commit = true) {
 const staged = (sh) => sh("diff", "--cached", "--name-only").split("\n").filter(Boolean).sort();
 
 try {
+  { // A partial stage previews and commits the index, not the newer working copy or other tracked edits.
+    const { sh, r, write } = repo({ "café space.txt": "base\n", "other.txt": "base\n" });
+    write("café space.txt", "staged\n"); sh("add", "café space.txt");
+    write("café space.txt", "working\nextra\n"); write("other.txt", "unstaged\n"); write("untracked.txt", "new\n");
+    sh("config", "diff.noprefix", "true");
+    const p = await r.nextCommit();
+    assert.equal(p.tracked, false); assert.deepEqual(p.files.map((f) => f.path), ["café space.txt"]);
+    assert.equal(p.files[0].add, 1); assert.equal(p.files[0].del, 1);
+    assert.ok(p.files[0].diff.hunks[0].lines.includes("+staged"));
+    assert.ok(!p.files[0].diff.hunks[0].lines.includes("+working"));
+    assert.match(p.files[0].diff.header[0], /^diff --git "?a\//);
+    await r.commit("feat: staged message\n\nBody from the preview");
+    assert.equal(sh("show", "HEAD:café space.txt"), "staged\n");
+    assert.equal(sh("show", "HEAD:other.txt"), "base\n");
+    assert.equal(sh("log", "-1", "--format=%B").trim(), "feat: staged message\n\nBody from the preview");
+    assert.ok(!sh("ls-tree", "--name-only", "HEAD").includes("untracked.txt"));
+  }
+  { // Commit tracked includes modifications and deletions, leaving new files out.
+    const { sh, r, write } = repo({ "[a].txt": "base\n", "gone.txt": "gone\n" });
+    write("[a].txt", "tracked\nsecond\n"); rmSync(join(r.root, "gone.txt")); write("new.txt", "untracked\n");
+    const p = await r.nextCommit();
+    assert.equal(p.tracked, true); assert.deepEqual(p.files.map((f) => f.path).sort(), ["[a].txt", "gone.txt"]);
+    const changed = p.files.find((f) => f.path === "[a].txt"), gone = p.files.find((f) => f.path === "gone.txt");
+    assert.equal(changed.add, 2); assert.equal(changed.del, 1); assert.equal(gone.add, 0); assert.equal(gone.del, 1);
+    await r.commit("fix: tracked changes");
+    assert.equal(sh("show", "HEAD:[a].txt"), "tracked\nsecond\n");
+    assert.deepEqual(sh("ls-tree", "--name-only", "HEAD").trim().split("\n"), ["[a].txt"]);
+    assert.equal(sh("status", "--porcelain").trim(), "?? new.txt");
+  }
+  { // Initial commits preview staged additions without needing HEAD.
+    const { sh, r, write } = repo({ "added.txt": "first\n" }, false);
+    sh("add", "added.txt"); write("added.txt", "later\n");
+    const p = await r.nextCommit();
+    assert.equal(p.tracked, false); assert.equal(p.files.length, 1); assert.equal(p.files[0].add, 1);
+    assert.ok(p.files[0].diff.hunks[0].lines.includes("+first"));
+    await r.commit("feat: initial commit"); assert.equal(sh("show", "HEAD:added.txt"), "first\n");
+  }
+  { // An empty/untracked-only repository can be previewed but cannot commit tracked changes.
+    const { r, write } = repo({}, false); write("new.txt", "untracked\n");
+    assert.deepEqual(await r.nextCommit(), { tracked: true, files: [] });
+    await assert.rejects(r.commit("empty"), /No tracked changes/);
+  }
+  { // Amend without a stage keeps the existing tree, including when the working copy changed.
+    const { sh, r, write } = repo({ "a.txt": "base\n" });
+    write("a.txt", "unstaged\n");
+    assert.deepEqual(await r.nextCommit(true), { tracked: false, files: [] });
+    await r.commit("fix: amended message", true);
+    assert.equal(sh("show", "HEAD:a.txt"), "base\n"); assert.equal(sh("rev-list", "--count", "HEAD").trim(), "1");
+    assert.equal(sh("log", "-1", "--format=%s").trim(), "fix: amended message");
+    sh("add", "a.txt"); write("a.txt", "newer\n");
+    const p = await r.nextCommit(true);
+    assert.equal(p.tracked, false); assert.ok(p.files[0].diff.hunks[0].lines.includes("+unstaged"));
+    await r.commit("", true);
+    assert.equal(sh("show", "HEAD:a.txt"), "unstaged\n"); assert.equal(sh("log", "-1", "--format=%s").trim(), "fix: amended message");
+  }
+  { // Renames keep their metadata and binary files remain visible even without text hunks.
+    const { sh, r, write } = repo({ "old name.txt": "1\n2\n3\n4\n5\n", "binary": "old\0data" });
+    sh("mv", "old name.txt", "new name.txt"); write("new name.txt", "1\n2\nTHREE\n4\n5\n");
+    write("binary", "new\0data"); sh("add", "-A");
+    const p = await r.nextCommit(), renamed = p.files.find((f) => f.path === "new name.txt"), binary = p.files.find((f) => f.path === "binary");
+    assert.equal(renamed.orig, "old name.txt"); assert.equal(renamed.add, 1); assert.equal(renamed.del, 1);
+    assert.ok(renamed.diff.header.includes("rename from old name.txt"));
+    assert.equal(binary.binary, true); assert.equal(binary.diff.hunks.length, 0);
+    assert.ok(binary.diff.header.some((l) => l.startsWith("Binary files ")));
+    await r.commit("feat: rename and binary");
+    assert.equal(sh("show", "HEAD:new name.txt"), "1\n2\nTHREE\n4\n5\n"); assert.equal(sh("show", "HEAD:binary"), "new\0data");
+  }
+  { // Intent-to-add is tracked by commit -a even before the first commit.
+    const { sh, r } = repo({ "intent.txt": "tracked new file\n" }, false);
+    sh("add", "-N", "intent.txt");
+    const p = await r.nextCommit();
+    assert.equal(p.tracked, true); assert.equal(p.files[0].add, 1);
+    await r.commit("feat: intent to add"); assert.equal(sh("show", "HEAD:intent.txt"), "tracked new file\n");
+  }
+  { // Pure renames have no changed lines, but the preview still shows what the index will commit.
+    const { sh, r } = repo({ "old.txt": "same\n" }); sh("mv", "old.txt", "new.txt");
+    const p = await r.nextCommit();
+    assert.equal(p.files.length, 1); assert.equal(p.files[0].add, 0); assert.equal(p.files[0].del, 0);
+    assert.ok(p.files[0].diff.header.includes("rename to new.txt"));
+  }
   { // Names are literal: staging "[a].txt" leaves "a.txt" alone.
     const { sh, r, write } = repo({ "a.txt": "1\n", "[a].txt": "1\n" });
     write("a.txt", "2\n"); write("[a].txt", "2\n");
