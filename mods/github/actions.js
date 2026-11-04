@@ -60,6 +60,9 @@ export async function prepareWorktree({ folder, ref, work }) {
   return { folder: path, branch, base: exists ? null : base, reused: exists };
 }
 
+// Its tab, focused: what "Join" does wherever an agent is shown.
+export const joinAgent = (agent) => run("agent.focus", { terminal: agent.address });
+
 // Starts the agent in a new tab, in the clone's space when there is one, with the brief as its first message.
 // wt: the worktree prepared for it, if any: the agent starts there and its brief says so first.
 export function launch(agent, { name, brief, folder, space, ref }, wt = null) {

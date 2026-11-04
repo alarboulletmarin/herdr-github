@@ -12,7 +12,9 @@ export function stageOf(item, mark, agents = [], kind = item.headRefName !== und
   if (closed(item)) return { stage: "done", why: String(item.state).toUpperCase() === "MERGED" ? "Merged" : "Closed" };
   const agent = agentOf(mark, agents);
   if (mark?.by === "hand") return { stage: mark.stage, why: "Set by you", agent };
-  if (agent) return { stage: "doing", why: agent.status === "working" ? "Agent working" : agent.status === "blocked" ? "Agent needs you" : "Agent waiting", agent };
+  // Finished (done, or idle once looked at): its work is yours to review.
+  if (agent) return agent.status === "working" ? { stage: "doing", why: "Agent working", agent }
+    : agent.status === "blocked" ? { stage: "doing", why: "Agent needs you", agent } : { stage: "review", why: "Agent finished", agent };
   if (kind === "pr") return item.isDraft ? { stage: "doing", why: "Draft" } : { stage: "review", why: "Open pull request" };
   if ((item.closedByPullRequestsReferences ?? []).length) return { stage: "review", why: `PR #${item.closedByPullRequestsReferences[0].number}` };
   if (mark) return { stage: mark.stage ?? "doing", why: mark.by === "agent" ? "Agent started" : "Brief copied" };

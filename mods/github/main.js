@@ -7,7 +7,7 @@ import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
 import { Board, renderStageMenu } from "./board.js";
-import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork, liveAgents, workOf } from "./actions.js";
+import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork, liveAgents, workOf, joinAgent } from "./actions.js";
 import { stageOf, ref } from "./work.js";
 
 const PAGE = 50, SYNC = 60000, LIVE = 10000;
@@ -52,7 +52,7 @@ function location(last) {
 function stagePill({ stage, why, agent }, p, t) {
   const color = stage === "review" ? p.link : agent?.status === "blocked" ? p.closed : p.attention;
   return h_flex().h(18).px(6).gap(4).flex_none().items_center().rounded(9).border_1().border_color(`${color}66`).bg(`${color}1a`).text_size(10.5).font_semibold().text_color(color)
-    .child(agent?.status === "working" ? spinner(10, color) : glyph(stage === "review" ? "pr-open" : agent ? "agent" : "clock", 10, color)).child(why);
+    .child(agent?.status === "working" ? spinner(10, color) : glyph(agent ? "agent" : stage === "review" ? "pr-open" : "clock", 10, color)).child(why);
 }
 
 export default class GitHub extends View {
@@ -238,8 +238,9 @@ export default class GitHub extends View {
   // ---- drawing: rows ----
   matches(text) { const q = this.query.trim().toLowerCase(); return !q || text.toLowerCase().includes(q); }
   hoverable(el, key) { return el.on_hover((on, cx) => { if (on) { if (this.hover !== key) { this.hover = key; cx.notify(); } } else if (this.hover === key) { this.hover = null; cx.notify(); } }); }
-  rowActions(item, kind, t) {
+  rowActions(item, kind, t, agent) {
     return h_flex().flex_none().gap(2).items_center()
+      .when(Boolean(agent), (e) => e.child(button(`join-${kind}-${item.repo}-${item.number}`, "Join", t, () => joinAgent(agent), { icon: "agent", invisible: true, small: true, tooltip: "Go to the agent's tab" })))
       .child(button(`brief-${kind}-${item.repo}-${item.number}`, "", t, (_e, cx) => this.copyBrief(item, kind, cx), { icon: "brief", invisible: true, small: true, tooltip: "Copy agent brief" }))
       .when(kind === "pr", (e) => e.child(button(`review-${item.repo}-${item.number}`, "Review", t, (_e, cx) => this.startAgent(item, kind, cx, "review"), { invisible: true, small: true, tooltip: "Start a read-only review" })))
       .child(button(`agent-${kind}-${item.repo}-${item.number}`, kind === "pr" ? "Fix" : "", t, (_e, cx) => this.startAgent(item, kind, cx), { icon: "agent", invisible: true, small: true, tooltip: kind === "pr" ? "Fix checks and requested changes" : "Start an agent on it" }));
@@ -251,7 +252,7 @@ export default class GitHub extends View {
     const checks = kind === "pr" && item.statusCheckRollup ? checksOf(item) : null;
     const meta = [`#${item.number}`, this.all() ? item.repo.split("/")[1] : null, kind === "pr" && item.headRefName ? item.headRefName : null, `${String(item.state).toUpperCase() === "OPEN" ? "opened" : "updated"} ${ago(String(item.state).toUpperCase() === "OPEN" ? item.createdAt : item.updatedAt)}`, item.author?.login ? `by ${item.author.login.replace(/^app\//, "")}` : null].filter(Boolean).join(" · ");
     const review = { APPROVED: ["check", p.open, "Approved"], CHANGES_REQUESTED: ["x-circle", p.closed, "Changes requested"] }[item.reviewDecision];
-    const s = stageOf(item, this.work[ref(item)], this.agentsNow, kind), work = s.stage === "doing" || (s.stage === "review" && kind === "issue") ? s : null;
+    const s = stageOf(item, this.work[ref(item)], this.agentsNow, kind), work = s.stage === "doing" || s.agent || (s.stage === "review" && kind === "issue") ? s : null;
     return this.hoverable(h_flex().id(key).relative().flex_none().px(12).py(9).gap(10).items_start().border_b(1).border_color(t.border).cursor_pointer()
       .bg(hovered ? t.hover : "#00000000")
       .on_click(() => this.open(item, kind))
@@ -270,7 +271,7 @@ export default class GitHub extends View {
         .when(Boolean(work), (e) => e.child(stagePill(work, p, t)))
         .when(item.assignees?.length > 0, (e) => e.child(div().text_size(11).text_color(t.dim).child(item.assignees.map((a) => a.login).join(", ")))))
       // Over the row's corner, so showing them never moves the text.
-      .when(hovered, (e) => e.child(div().absolute().top(5).right(8).p(2).rounded(7).bg(t.raised).border_1().border_color(t.border).child(this.rowActions(item, kind, t)))), key);
+      .when(hovered, (e) => e.child(div().absolute().top(5).right(8).p(2).rounded(7).bg(t.raised).border_1().border_color(t.border).child(this.rowActions(item, kind, t, s.agent)))), key);
   }
 
   runRow(r, t) {

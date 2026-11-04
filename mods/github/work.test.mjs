@@ -13,7 +13,9 @@ assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, []).why
 const agent = { tab_name: "#7 r", status: "working" };
 assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [agent]).why, "Agent working");
 assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [{ ...agent, status: "blocked" }]).why, "Agent needs you");
-assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [{ ...agent, status: "idle" }]).why, "Agent waiting");
+assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [{ ...agent, status: "idle" }]).why, "Agent finished");
+for (const status of ["done", "idle"]) assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [{ ...agent, status }]).stage, "review", `${status}: yours to review`);
+assert.equal(stageOf(open, { stage: "doing", by: "hand", tab: "#7 r" }, [{ ...agent, status: "done" }]).stage, "doing", "a hand mark still wins");
 assert.equal(stageOf({ ...open, closedByPullRequestsReferences: [{ number: 9 }] }).stage, "review", "a linked PR: in review");
 assert.equal(stageOf({ ...open, closedByPullRequestsReferences: [{ number: 9 }] }, null, [agent]).stage, "review", "no mark: a stray agent tab isn't matched");
 assert.equal(stageOf({ ...open, closedByPullRequestsReferences: [] }, { stage: "todo", by: "hand" }).stage, "todo", "hand mark wins over auto");

@@ -4,7 +4,7 @@ import { theme, shared, openOverlay, closeOverlay } from "herdr";
 import { primer, glyph, spinner, ago, issueState, prState, labelChip, button, blankslate, under } from "./ui.js";
 import { load } from "./gh.js";
 import { STAGES, columns, ref } from "./work.js";
-import { setWork, liveAgents } from "./actions.js";
+import { setWork, liveAgents, joinAgent } from "./actions.js";
 
 const PAGE = 30, SYNC = 60000;
 const TONE = { todo: "neutral", doing: "attention", review: "link", done: "done" };
@@ -53,6 +53,7 @@ export class Board {
         .child(glyph(g, 14, color)).child(div().child(`#${item.number}`))
         .when(kind === "pr", (e) => e.child(div().truncate().font_family("JetBrains Mono").text_size(11).child(item.headRefName)))
         .child(div().flex_1())
+        .when(Boolean(agent), (e) => e.child(button(`join-${key}`, "Join", t, () => joinAgent(agent), { icon: "agent", invisible: true, small: true, tooltip: "Go to the agent's tab" })))
         .child(button(`move-${key}`, "", t, () => stageMenu(key), { icon: "chevron-down", invisible: true, small: true, tooltip: "Move to…" })))
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(item.title))
       .when(item.labels?.length > 0, (e) => e.child(h_flex().gap(4).flex_wrap().children(item.labels.slice(0, 3).map((l) => labelChip(l, t, true)))))
