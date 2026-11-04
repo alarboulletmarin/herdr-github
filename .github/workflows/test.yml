@@ -11,3 +11,8 @@ jobs:
       - name: Briefs, CI logs, pictures and timelines
         working-directory: mods/github
         run: for t in *.test.mjs; do node "$t"; done
+      - name: "Git panel: parsers and git calls against real repositories"
+        working-directory: mods/git
+        run: |
+          git config --global user.email ci@example.com && git config --global user.name ci
+          for t in *.test.mjs; do node "$t"; done
