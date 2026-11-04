@@ -62,6 +62,7 @@ export async function prepareWorktree({ folder, ref, work }) {
 
 // Its tab, focused: what "Join" does wherever an agent is shown.
 export const joinAgent = (agent) => run("agent.focus", { terminal: agent.address });
+export const showChanges = (history) => openOverlay({ mod: "git", kind: "dialog", width: 0.92, height: 0.9, props: { history } });
 
 // Starts the agent in a new tab, in the clone's space when there is one, with the brief as its first message.
 // wt: the worktree prepared for it, if any: the agent starts there and its brief says so first.

@@ -6,8 +6,8 @@ import { entries, tally, loginOf } from "./timeline.js";
 import { primer, glyph, spinner, ago, openUrl, issueState, prState, checksOf, runState, glyphOf, labelChip, button, badge, segmented } from "./ui.js";
 import { ghJson, gh, localState } from "./gh.js";
 import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
-import { copied, pickAgent, copyMenu, setWork, liveAgents, workOf, joinAgent } from "./actions.js";
-import { STAGES, stageOf } from "./work.js";
+import { copied, pickAgent, copyMenu, setWork, liveAgents, workOf, joinAgent, showChanges } from "./actions.js";
+import { STAGES, stageOf, changesOf } from "./work.js";
 
 const FIELDS = {
   issue: "number,title,body,author,state,stateReason,labels,assignees,createdAt,updatedAt,comments,url,milestone,closedByPullRequestsReferences,reactionGroups",
@@ -309,11 +309,13 @@ export class Viewer {
     const mine = i.assignees.some((a) => a.login === me), labels = this.repoLabels[this.repo];
     const linked = pr ? i.closingIssuesReferences ?? [] : i.closedByPullRequestsReferences ?? [];
     const mark = (shared("github.work") ?? {})[this.key()], s = stageOf(i, mark, liveAgents(), this.kind);
+    const changes = changesOf(mark, s);
     const status = v_flex().gap(8)
       .child(segmented("stage", STAGES.filter(([k]) => k !== "done"), mark?.by === "hand" ? mark.stage : null, t, (k, _cx) => setWork(this.key(), k)))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_1().min_w(0).truncate().child(`${STAGES.find(([k]) => k === s.stage)[1]}${s.why ? ` · ${s.why}` : ""}`))
         .when(Boolean(s.agent), (e) => e.child(link("stage-join", "Join", () => joinAgent(s.agent))))
+        .when(Boolean(changes), (e) => e.child(link("stage-changes", "Changes", () => showChanges(changes))))
         .when(Boolean(mark), (e) => e.child(link("stage-auto", mark.by === "hand" ? "Auto" : "Clear", () => setWork(this.key(), null)))));
     return v_flex().id("aside").w(268).flex_none().min_h(0).overflow_y_scrollbar().pl(8).pr(24).pt(6)
       .child(part("Status", status))
