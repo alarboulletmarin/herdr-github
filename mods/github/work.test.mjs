@@ -1,5 +1,5 @@
 // node mods/github/work.test.mjs
-import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf } from "./work.js";
+import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf, changesOf } from "./work.js";
 import { slug } from "./brief.js";
 import assert from "assert";
 
@@ -67,4 +67,17 @@ assert.equal(agentOf(null, [there]), null);
 assert.equal(stageOf(open, { ...wt, folder: "/x" }, [{ status: "working", cwd: "/x" }]).why, "Agent working");
 assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }]), null, "the same path on another machine is not it");
 assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }, { space: "local", cwd: "/x", n: 1 }]).n, 1);
+// Changes follows the finished agent's worktree, including a cwd below its root.
+for (const status of ["done", "idle"]) {
+  const s = stageOf(open, wt, [{ ...there, status }]);
+  assert.deepEqual(changesOf(wt, s), { root: wt.folder, on: null });
+}
+for (const status of ["working", "blocked"]) assert.equal(changesOf(wt, stageOf(open, wt, [{ ...there, status }])), null);
+assert.equal(changesOf(null, stageOf(open)), null);
+assert.equal(changesOf({ tab: "#7 r" }, stageOf(open, { tab: "#7 r" }, [{ ...agent, status: "done" }])), null, "no worktree: no Changes button");
+assert.equal(changesOf(wt, stageOf(open, wt, [])), null, "agent gone is not Agent finished");
+assert.equal(changesOf(wt, stageOf({ ...open, state: "CLOSED" }, wt, [{ ...there, status: "done" }])), null);
+assert.equal(changesOf(wt, stageOf({ ...open, headRefName: "b" }, null)), null, "an open PR alone is not finished work");
+const hand = { ...wt, by: "hand", stage: "review" };
+assert.equal(changesOf(hand, stageOf(open, hand, [{ ...there, status: "done" }])), null, "manual review is not Agent finished");
 console.log("work ok");
