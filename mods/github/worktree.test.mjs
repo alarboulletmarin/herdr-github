@@ -27,7 +27,7 @@ try {
 
   const task = { folder: clone, ref: "me/proj#12", work: { kind: "issue", number: 12, title: "Export a note", labels: ["bug"] } };
   const wt = await prepareWorktree(task);
-  assert.deepEqual(wt, { folder: join(top, "home/.herdr/worktrees/proj/fix-12-export-a-note"), branch: "fix/12-export-a-note", base: "origin/main", reused: false });
+  assert.deepEqual(wt, { folder: join(top, "home/.herdr/worktrees/proj/me-issue-12"), branch: "fix/12-export-a-note", base: "origin/main", reused: false });
   assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "HEAD"), "fix/12-export-a-note");
   assert.equal(sh(clone, "status", "--porcelain"), "M a", "the clone keeps its changes and its branch");
   assert.equal(sh(clone, "rev-parse", "--abbrev-ref", "HEAD"), "main");
@@ -39,6 +39,21 @@ try {
   sh(clone, "worktree", "remove", "--force", wt.folder);
   const back = await prepareWorktree(task);
   assert.equal(back.reused, true); assert.equal(back.base, null); assert.ok(existsSync(back.folder));
+
+  // Deleted by hand (rm -rf, not git worktree remove): pruned and made again, not handed out as a missing folder.
+  rmSync(back.folder, { recursive: true, force: true });
+  const made = await prepareWorktree(task);
+  assert.ok(existsSync(made.folder)); assert.equal(made.branch, "fix/12-export-a-note");
+
+  // A reused worktree reports the branch it is really on.
+  sh(made.folder, "checkout", "-q", "-b", "pr-12");
+  assert.equal((await prepareWorktree(task)).branch, "pr-12");
+
+  // A pull request gh can't check out (no GitHub here): nothing is left behind for a retry to reuse.
+  const pr = { ...task, ref: "me/proj#5", work: { kind: "pr", number: 5, title: "x", headRefName: "topic" } };
+  await assert.rejects(prepareWorktree(pr));
+  assert.ok(!existsSync(join(top, "home/.herdr/worktrees/proj/me-pr-5")));
+  assert.ok(!sh(clone, "worktree", "list").includes("me-pr-5"));
 
   // No origin/HEAD (offline, or never set): the clone's current branch is the base.
   sh(clone, "remote", "set-head", "origin", "--delete"); sh(clone, "config", "remote.origin.followRemoteHEAD", "never"); // git ≥ 2.48 would recreate it on fetch

@@ -1,5 +1,5 @@
 // node mods/github/work.test.mjs
-import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf, dirSlug } from "./work.js";
+import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf } from "./work.js";
 import { slug } from "./brief.js";
 import assert from "assert";
 
@@ -52,8 +52,8 @@ assert.equal(branchFor({ kind: "issue", number: 12, title: "Export: save a note 
 assert.equal(branchFor({ kind: "issue", number: 3, title: "Crash", labels: [{ name: "bug" }] }, slug), "fix/3-crash");
 assert.equal(branchFor({ kind: "issue", number: 4, title: "🎉", labels: [] }, slug), "feat/4", "no usable word: no dangling dash");
 assert.equal(branchFor({ kind: "pr", number: 9, headRefName: "someone/topic" }, slug), "someone/topic");
-assert.equal(worktreePath("/home/a", "o/bref", "feat/12-x"), "/home/a/.herdr/worktrees/bref/feat-12-x");
-assert.equal(dirSlug("a b/c:d"), "a-b-c-d"); assert.equal(dirSlug("/x/"), "x");
+assert.equal(worktreePath("/home/a", "o/bref#12", "issue"), "/home/a/.herdr/worktrees/bref/o-issue-12");
+assert.notEqual(worktreePath("/h", "alice/p#7", "pr"), worktreePath("/h", "bob/p#7", "pr"), "two forks' #7 never share a folder");
 const note = worktreeNote({ folder: "/w/f", branch: "feat/1-x", base: "origin/main" });
 assert.match(note, /`\/w\/f`, on branch `feat\/1-x`, created from `origin\/main`/); assert.match(note, /Don't create or switch branches/); assert.match(note, /replaces any step below that gets or creates a branch/); assert.doesNotMatch(note, /existed already/);
 assert.match(worktreeNote({ folder: "/w/f", branch: "b", reused: true }), /existed already/);
@@ -65,4 +65,6 @@ assert.equal(agentOf(wt, [{ ...there, cwd: "/h/.herdr/worktrees/api/feat-7-xy" }
 assert.equal(agentOf({ stage: "doing", by: "agent", tab: "#7 api" }, [homonym]), homonym, "no worktree: the tab name, as before");
 assert.equal(agentOf(null, [there]), null);
 assert.equal(stageOf(open, { ...wt, folder: "/x" }, [{ status: "working", cwd: "/x" }]).why, "Agent working");
+assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }]), null, "the same path on another machine is not it");
+assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }, { space: "local", cwd: "/x", n: 1 }]).n, 1);
 console.log("work ok");

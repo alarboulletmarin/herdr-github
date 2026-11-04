@@ -40,17 +40,22 @@ export async function prepareWorktree({ folder, ref, work }) {
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `git ${args[0]} failed`);
     return r.stdout.trim();
   };
-  const repo = ref.split("#")[0], branch = branchFor(work, slug), path = worktreePath(home(), repo, branch);
+  const repo = ref.split("#")[0], branch = branchFor(work, slug), path = worktreePath(home(), ref, work.kind);
+  await git(["worktree", "prune"]); // forgets worktrees whose folder was deleted by hand
   const known = (await git(["worktree", "list", "--porcelain"])).split("\n").some((l) => l === `worktree ${path}`);
-  if (known) return { folder: path, branch, base: null, reused: true };
+  // Its branch as it is, which may be pr-N after a fallback.
+  if (known) return { folder: path, branch: await git(["rev-parse", "--abbrev-ref", "HEAD"], path), base: null, reused: true };
   await git(["fetch", "--quiet", "origin"]).catch(() => null); // offline: the local refs will do
   const base = await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => git(["rev-parse", "--abbrev-ref", "HEAD"]));
   if (work.kind === "pr") {
     await git(["worktree", "add", "--detach", path, base]);
-    const r = await exec("gh", ["pr", "checkout", String(work.number)], { cwd: path });
+    const r = await exec("gh", ["pr", "checkout", String(work.number), "-R", repo], { cwd: path });
     if (r.code !== 0) { // its branch is checked out elsewhere (often the clone itself): a local name of its own
-      const again = await exec("gh", ["pr", "checkout", String(work.number), "--branch", `pr-${work.number}`], { cwd: path });
-      if (again.code !== 0) throw new Error((again.stderr || r.stderr).trim() || "gh pr checkout failed");
+      const again = await exec("gh", ["pr", "checkout", String(work.number), "-R", repo, "--branch", `pr-${work.number}`], { cwd: path });
+      if (again.code !== 0) { // not left behind on the base commit, where a retry would reuse it
+        await git(["worktree", "remove", "--force", path]).catch(() => null);
+        throw new Error((again.stderr || r.stderr).trim() || "gh pr checkout failed");
+      }
       return { folder: path, branch: `pr-${work.number}`, base: null, reused: false };
     }
     return { folder: path, branch, base: null, reused: false };
@@ -67,9 +72,9 @@ export const joinAgent = (agent) => run("agent.focus", { terminal: agent.address
 // wt: the worktree prepared for it, if any: the agent starts there and its brief says so first.
 export function launch(agent, { name, brief, folder, space, ref }, wt = null) {
   const args = { name: name.slice(0, 48), argv: agent.run, task: wt ? worktreeNote(wt) + brief : brief };
-  if (ref) setWork(ref, "doing", { by: "agent", tab: args.name, ...(wt ? { folder: wt.folder, branch: wt.branch } : {}) });
   const home = space ?? spaces().find((s) => !s.machine && folder && s.folder === folder)?.id ?? spaces().find((s) => s.active)?.id;
   if (home) args.space = home;
+  if (ref) setWork(ref, "doing", { by: "agent", tab: args.name, ...(wt ? { folder: wt.folder, branch: wt.branch, space: home ?? null } : {}) });
   if (wt) args.folder = wt.folder; else if (folder) args.folder = folder;
   run("tab.new", args);
   notify({ title: `${agent.name} started`, body: name, level: "success", timeout: 3000 });
@@ -104,7 +109,7 @@ export class AgentMenu {
           .child(div().truncate().text_size(11).text_color(t.dim).child(this.isolate ? `on ${this.branch}` : "in the clone, on its current branch")))))
       .child(h_flex().px(8).py(6).gap(6).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
         .child(this.busy ? spinner(12, t.dim) : glyph("folder", 12, t.dim))
-        .child(div().truncate().child(this.busy ?? (!this.task.folder ? "Not cloned here: the agent will clone it" : this.isolate ? worktreePath(home(), this.task.ref.split("#")[0], this.branch) : this.task.folder))));
+        .child(div().truncate().child(this.busy ?? (!this.task.folder ? "Not cloned here: the agent will clone it" : this.isolate ? worktreePath(home(), this.task.ref, this.task.work.kind) : this.task.folder))));
   }
   // The menu stays open while the worktree is made (its task would end with it), then starts the agent.
   start(agent, cx) {

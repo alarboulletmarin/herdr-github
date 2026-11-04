@@ -44,14 +44,14 @@ export function columns(items, marks = {}, agents = []) {
 }
 
 // ---- the agent's own worktree ----
-// Herdr's convention (its worktree mod): <home>/.herdr/worktrees/<repo>/<branch, anything odd as dashes>.
-export const dirSlug = (branch) => branch.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 // The branch an issue's agent works on, as the brief has always named it; a pull request keeps its own.
 export function branchFor({ kind, number, title, labels = [], headRefName }, slug) {
   if (kind === "pr") return headRefName;
   return `${labels.some((l) => /bug/i.test(l.name ?? l)) ? "fix" : "feat"}/${number}-${slug(title)}`.replace(/-$/, "");
 }
-export const worktreePath = (home, repo, branch) => `${home}/.herdr/worktrees/${repo.split("/")[1]}/${dirSlug(branch)}`;
+// Under Herdr's <home>/.herdr/worktrees/<repo>/, one folder per item, named by the item and not its branch:
+// short, ASCII and unique even for two forks' "topic" branches or alice/proj#7 next to bob/proj#7.
+export const worktreePath = (home, ref, kind) => { const [owner, name] = ref.split("#")[0].split("/"); return `${home}/.herdr/worktrees/${name}/${owner}-${kind}-${ref.split("#")[1]}`; };
 // Put first in the agent's brief: where it already is, so it neither branches again nor leaves.
 export function worktreeNote({ folder, branch, base, reused }) {
   return [
@@ -66,6 +66,7 @@ export function worktreeNote({ folder, branch, base, reused }) {
 // The agent on that item: the one working in its worktree; without a worktree, the tab it was started in
 // (a name, so two repositories called the same can mix up: the worktree is what makes it exact).
 export function agentOf(mark, agents) {
-  if (mark?.folder) return agents.find((a) => a.cwd && (a.cwd === mark.folder || a.cwd.startsWith(`${mark.folder}/`))) ?? null;
+  // The same path can exist on another machine: its space tells them apart.
+  if (mark?.folder) return agents.find((a) => a.cwd && (!mark.space || a.space === mark.space) && (a.cwd === mark.folder || a.cwd.startsWith(`${mark.folder}/`))) ?? null;
   return mark?.tab ? agents.find((a) => a.tab_name === mark.tab) ?? null : null;
 }
