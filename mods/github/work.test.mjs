@@ -1,5 +1,5 @@
 // node mods/github/work.test.mjs
-import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf, changesOf } from "./work.js";
+import { stageOf, marked, ref, columns, branchFor, worktreePath, worktreeNote, agentOf, changesOf, cleanupOf } from "./work.js";
 import { slug } from "./brief.js";
 import assert from "assert";
 
@@ -80,4 +80,13 @@ assert.equal(changesOf(wt, stageOf({ ...open, state: "CLOSED" }, wt, [{ ...there
 assert.equal(changesOf(wt, stageOf({ ...open, headRefName: "b" }, null)), null, "an open PR alone is not finished work");
 const hand = { ...wt, by: "hand", stage: "review" };
 assert.equal(changesOf(hand, stageOf(open, hand, [{ ...there, status: "done" }])), null, "manual review is not Agent finished");
+// Clean up: closed or merged, with a worktree, and no agent still in it.
+const merged = { ...open, state: "MERGED", headRefName: "b" }, closedIssue = { ...open, state: "CLOSED" };
+assert.equal(cleanupOf(wt, stageOf(merged, wt, []), []), true, "merged PR with a worktree");
+assert.equal(cleanupOf(wt, stageOf(closedIssue, wt, []), []), true, "closed issue with a worktree");
+assert.equal(cleanupOf(wt, stageOf(merged, wt, []), [{ ...there, status: "idle" }]), false, "an agent still sits in it");
+assert.equal(cleanupOf(wt, stageOf(open, wt, [{ ...there, status: "done" }]), [{ ...there, status: "done" }]), false, "still open");
+assert.equal(cleanupOf({ tab: "#7 r" }, stageOf(closedIssue, { tab: "#7 r" }, []), []), false, "no worktree");
+assert.equal(cleanupOf(null, stageOf(closedIssue)), false);
+assert.equal(cleanupOf(wt, { stage: "done", why: "Set by you" }, []), false, "done by hand is not merged");
 console.log("work ok");

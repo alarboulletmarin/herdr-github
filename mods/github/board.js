@@ -3,8 +3,8 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme, shared, openOverlay, closeOverlay } from "herdr";
 import { primer, glyph, spinner, ago, issueState, prState, labelChip, button, blankslate, under } from "./ui.js";
 import { load } from "./gh.js";
-import { STAGES, columns, ref, changesOf } from "./work.js";
-import { setWork, liveAgents, joinAgent, showChanges } from "./actions.js";
+import { STAGES, columns, ref, changesOf, cleanupOf } from "./work.js";
+import { setWork, liveAgents, joinAgent, showChanges, cleanUp } from "./actions.js";
 
 const PAGE = 30, SYNC = 60000;
 const TONE = { todo: "neutral", doing: "attention", review: "link", done: "done" };
@@ -44,7 +44,7 @@ export class Board {
   card(c, t) {
     const p = primer(t), { item, kind, stage, why, agent } = c, key = ref(item);
     const [g, color] = kind === "pr" ? prState(item, p) : issueState(item, p);
-    const changes = changesOf(this.work[key], c);
+    const changes = changesOf(this.work[key], c), cleanup = cleanupOf(this.work[key], c, this.agentsNow);
     const tone = agent?.status === "blocked" ? p.closed : p[TONE[stage]];
     return v_flex().id(`card-${key}`).flex_none().p(10).gap(6).rounded(8).bg(t.background).border_1().border_color(t.border).cursor_pointer()
       .hover((s) => s.border_color(p.link))
@@ -56,6 +56,7 @@ export class Board {
         .child(div().flex_1())
         .when(Boolean(agent), (e) => e.child(button(`join-${key}`, "Join", t, () => joinAgent(agent), { icon: "agent", invisible: true, small: true, tooltip: "Go to the agent's tab" })))
         .when(Boolean(changes), (e) => e.child(button(`changes-${key}`, "Changes", t, (_e, cx) => { cx.stop_propagation(); showChanges(changes); }, { icon: "diff", invisible: true, small: true, tooltip: "Review the agent’s commits" })))
+        .when(cleanup, (e) => e.child(button(`cleanup-${key}`, "Clean up", t, (_e, cx) => { cx.stop_propagation(); cleanUp(key, this.work[key]); }, { icon: "close", invisible: true, small: true, tooltip: "Remove the agent’s worktree, and its branch if merged" })))
         .child(button(`move-${key}`, "", t, () => stageMenu(key), { icon: "chevron-down", invisible: true, small: true, tooltip: "Move to…" })))
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(item.title))
       .when(item.labels?.length > 0, (e) => e.child(h_flex().gap(4).flex_wrap().children(item.labels.slice(0, 3).map((l) => labelChip(l, t, true)))))
@@ -97,7 +98,8 @@ export class Board {
       : blankslate(t, { icon: "spin", title: "Loading the board…", body: `Issues and pull requests of ${this.repo}.` }));
     // Read once per render: agents() and shared() cross into the app.
     this.work = shared("github.work") ?? {};
-    const cols = columns(this.items, this.work, liveAgents());
+    this.agentsNow = liveAgents();
+    const cols = columns(this.items, this.work, this.agentsNow);
     return frame.child(h_flex().flex_1().min_h(0).p(16).gap(12).items_start().children(STAGES.map((s) => this.column(s, cols[s[0]], t))));
   }
 }

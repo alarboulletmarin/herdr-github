@@ -65,6 +65,38 @@ export async function prepareWorktree({ folder, ref, work }) {
   return { folder: path, branch, base: exists ? null : base, reused: exists };
 }
 
+// Removes an agent's worktree, then its branch if origin's default branch holds it (merged, freshly fetched).
+// git refuses a worktree with uncommitted changes: that error is thrown and nothing is touched. A branch
+// not in the base (a squash merge, or closed unmerged) is kept: returned as deleted: false.
+// A folder already gone (deleted by hand): { gone: true }, nothing to do.
+export async function removeWorktree({ folder }) {
+  const at = (cwd) => async (args) => {
+    const r = await exec("git", args, { cwd }).catch((e) => ({ code: 1, stderr: String(e?.message ?? e) }));
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `git ${args[0]} failed`);
+    return r.stdout.trim();
+  };
+  const common = await at(folder)(["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => null);
+  if (!common) return { gone: true };
+  const clone = common.replace(/\/\.git\/?$/, ""), git = at(clone);
+  const branch = await at(folder)(["rev-parse", "--abbrev-ref", "HEAD"]);
+  await git(["worktree", "remove", folder]);
+  if (branch === "HEAD") return { branch: null, deleted: false };
+  await git(["fetch", "--quiet", "origin"]).catch(() => null);
+  const base = await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => git(["rev-parse", "--abbrev-ref", "HEAD"]));
+  const merged = await git(["merge-base", "--is-ancestor", branch, base]).then(() => true, () => false);
+  if (merged) await git(["branch", "-D", branch]);
+  return { branch, base, deleted: merged };
+}
+// The "Clean up" button: removes the worktree, forgets the mark, says what was kept.
+export async function cleanUp(key, mark) {
+  try {
+    const r = await removeWorktree(mark);
+    setWork(key, null);
+    notify({ title: r.gone ? "Worktree already gone" : "Worktree removed", level: "success", timeout: 4000,
+      body: r.gone || !r.branch ? key : r.deleted ? `${key} · branch ${r.branch} deleted` : `${key} · branch ${r.branch} kept: not in ${r.base} (squash merge or unmerged)` });
+  } catch (e) { notify({ title: "Worktree kept", body: String(e?.message ?? e), level: "error", timeout: 8000 }); }
+}
+
 // Its tab, focused: what "Join" does wherever an agent is shown.
 export const joinAgent = (agent) => run("agent.focus", { terminal: agent.address });
 export const showChanges = (history) => openOverlay({ mod: "git", kind: "dialog", width: 0.92, height: 0.9, props: { history } });

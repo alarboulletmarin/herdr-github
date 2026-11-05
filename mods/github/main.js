@@ -7,8 +7,8 @@ import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
 import { Board, renderStageMenu } from "./board.js";
-import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork, liveAgents, workOf, joinAgent, showChanges } from "./actions.js";
-import { stageOf, ref, changesOf } from "./work.js";
+import { AgentMenu, copied, pickAgent, copyMenu, renderCopyMenu, setWork, liveAgents, workOf, joinAgent, showChanges, cleanUp } from "./actions.js";
+import { stageOf, ref, changesOf, cleanupOf } from "./work.js";
 
 const PAGE = 50, SYNC = 60000, LIVE = 10000;
 const TABS = {
@@ -239,10 +239,11 @@ export default class GitHub extends View {
   matches(text) { const q = this.query.trim().toLowerCase(); return !q || text.toLowerCase().includes(q); }
   hoverable(el, key) { return el.on_hover((on, cx) => { if (on) { if (this.hover !== key) { this.hover = key; cx.notify(); } } else if (this.hover === key) { this.hover = null; cx.notify(); } }); }
   rowActions(item, kind, t, s) {
-    const agent = s.agent, changes = changesOf(this.work[ref(item)], s);
+    const mark = this.work[ref(item)], agent = s.agent, changes = changesOf(mark, s), cleanup = cleanupOf(mark, s, this.agentsNow);
     return h_flex().flex_none().gap(2).items_center()
       .when(Boolean(agent), (e) => e.child(button(`join-${kind}-${item.repo}-${item.number}`, "Join", t, () => joinAgent(agent), { icon: "agent", invisible: true, small: true, tooltip: "Go to the agent's tab" })))
       .when(Boolean(changes), (e) => e.child(button(`changes-${kind}-${item.repo}-${item.number}`, "Changes", t, (_e, cx) => { cx.stop_propagation(); showChanges(changes); }, { icon: "diff", invisible: true, small: true, tooltip: "Review the agent’s commits" })))
+      .when(cleanup, (e) => e.child(button(`cleanup-${kind}-${item.repo}-${item.number}`, "Clean up", t, (_e, cx) => { cx.stop_propagation(); cleanUp(ref(item), mark); }, { icon: "close", invisible: true, small: true, tooltip: "Remove the agent’s worktree, and its branch if merged" })))
       .child(button(`brief-${kind}-${item.repo}-${item.number}`, "", t, (_e, cx) => this.copyBrief(item, kind, cx), { icon: "brief", invisible: true, small: true, tooltip: "Copy agent brief" }))
       .when(kind === "pr", (e) => e.child(button(`review-${item.repo}-${item.number}`, "Review", t, (_e, cx) => this.startAgent(item, kind, cx, "review"), { invisible: true, small: true, tooltip: "Start a read-only review" })))
       .child(button(`agent-${kind}-${item.repo}-${item.number}`, kind === "pr" ? "Fix" : "", t, (_e, cx) => this.startAgent(item, kind, cx), { icon: "agent", invisible: true, small: true, tooltip: kind === "pr" ? "Fix checks and requested changes" : "Start an agent on it" }));
