@@ -1,5 +1,5 @@
 // node mods/github/brief.test.mjs
-import { slug, issueBrief, prReviewBrief, prFixBrief, runBrief } from "./brief.js";
+import { slug, issueBrief, prReviewBrief, prFixBrief, runBrief, fill, unknownVars, VARS, DEFAULTS, issueVars, prVars, runVars } from "./brief.js";
 import assert from "assert";
 
 assert.equal(slug("Export: save a rendered note as a portable PDF"), "export-save-a-rendered-note-as", "cut on a dash, ≤ 30");
@@ -36,5 +36,24 @@ assert(failing.includes("Reproduce failing checks locally") && failing.includes(
 
 for (const b of [issue, pr, review, failing, run]) assert(!/[éèàêç]/.test(b.replace(/in French/, "")), "instructions in English only");
 assert(issue.includes("Report (in French"), "report asked in French");
+
+// Templates: the engine, a custom template, and the variable list matching what is computed.
+assert.equal(fill("a\n\n{{x}}\n\nb", { x: "" }), "a\n\nb", "an empty variable alone on its line leaves no hole");
+assert.equal(fill("a {{x}} b", { x: "" }), "a  b", "inline empty variable: just removed");
+assert.equal(fill("{{ x }}-{{nope}}", { x: 1 }), "1-{{nope}}", "spaces allowed, unknown kept visible");
+assert.equal(fill("{{x}}", { x: "{{y}} $& $1" , y: "no" }), "{{y}} $& $1", "values are never expanded again, $ patterns kept");
+assert.equal(fill("{{constructor}}", {}), "{{constructor}}", "no prototype lookups");
+assert.equal(fill("", { x: 1 }), "", "empty template");
+assert.deepEqual(unknownVars("{{repo}} {{nope}} {{nope}} {{ rules }}", VARS.issue.map(([k]) => k)), ["nope"], "unknown names, once");
+const custom = issueBrief({ repo: "o/r", number: 7, title: "t", url: "u" }, { templates: { issue: "X {{number}}\n{{rules}}\n{{report}}", rules: "R {{repo}}", report: "" } });
+assert.equal(custom, "X 7\nR o/r", "saved templates replace defaults, blocks take variables, an emptied block disappears");
+assert.equal(issueBrief({ repo: "o/r", number: 7, title: "t", url: "u" }, { templates: {} }), issueBrief({ repo: "o/r", number: 7, title: "t", url: "u" }), "nothing saved: defaults");
+assert.equal(issueBrief({ repo: "o/r", number: 7, title: "t", url: "u" }, { templates: { issue: undefined, rules: null } }), issueBrief({ repo: "o/r", number: 7, title: "t", url: "u" }), "a missing saved value (undefined or null) keeps the default");
+const blocks = ["conventions", "rules", "report"];
+for (const [name, vars] of [["issue", issueVars({ repo: "o/r", number: 1, title: "t" })], ["review", prVars({ repo: "o/r" })], ["fix", prVars({ repo: "o/r" })], ["run", runVars({ repo: "o/r" })]]) {
+  assert.deepEqual(VARS[name].map(([k]) => k).sort(), [...Object.keys(vars), ...blocks].sort(), `${name}: the documented variables are the computed ones`);
+  assert.deepEqual(unknownVars(DEFAULTS[name], VARS[name].map(([k]) => k)), [], `${name}: its default uses only known variables`);
+}
+for (const b of blocks) assert.deepEqual(unknownVars(DEFAULTS[b], []), [], `${b}: no variable in the default block`);
 
 console.log("brief.test ok");

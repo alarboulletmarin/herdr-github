@@ -6,6 +6,7 @@ import { entries, tally, loginOf } from "./timeline.js";
 import { primer, glyph, spinner, ago, openUrl, issueState, prState, checksOf, runState, glyphOf, labelChip, button, badge, segmented } from "./ui.js";
 import { ghJson, gh, localState } from "./gh.js";
 import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
+import { openBriefs, savedTemplates } from "./briefs.js";
 import { copied, pickAgent, copyMenu, setWork, liveAgents, workOf, joinAgent, showChanges, cleanUp } from "./actions.js";
 import { STAGES, stageOf, changesOf, cleanupOf } from "./work.js";
 
@@ -125,7 +126,7 @@ export class Viewer {
 
   brief(mode = "fix") {
     const local = this.local() ? { ...this.local(), ...this.localState } : null;
-    return this.pr() ? (mode === "review" ? prReviewBrief : prFixBrief)(this.item, { local }) : issueBrief(this.item, { local });
+    return this.pr() ? (mode === "review" ? prReviewBrief : prFixBrief)(this.item, { local, templates: savedTemplates() }) : issueBrief(this.item, { local, templates: savedTemplates() });
   }
   copyBrief(cx) {
     if (this.pr()) return copyMenu([["Copy review brief", this.brief("review"), "Review · read-only"], ["Copy fix brief", this.brief("fix"), "Fix checks and requested changes"]]);
@@ -366,6 +367,7 @@ export class Viewer {
         .child(button("copy", "", t, () => copyMenu([["Copy link", i.url], ["Copy reference", `${this.repo}#${i.number}`], ["Copy number and title", `#${i.number} ${i.title}`]]), { icon: "copy", tooltip: "Copy link or reference" }))
         .child(button("github", "", t, () => openUrl(i.url), { icon: "external", tooltip: "Open on GitHub" }))
         .when(pr && this.open(), (x) => x.child(button("checkout", "Checkout", t, () => this.checkout(), { icon: "terminal", tooltip: "gh pr checkout in a new tab" })))
+        .child(button("templates", "", t, () => openBriefs({ kind: pr ? "pr" : "issue", data: this.item, local: this.local() ? { ...this.local(), ...this.localState } : null }), { icon: "pencil", enabled: i.body !== undefined, tooltip: "Edit the brief templates, previewed on this one" }))
         .child(button("brief", "Copy brief", t, (_e, cx) => this.copyBrief(cx), { icon: "brief", enabled: i.body !== undefined, tooltip: i.body === undefined ? "Loading the issue first" : null }))
         // The row the dialog opened on has no body: a brief from it would miss the description and comments.
         .when(pr, (x) => x.child(button("review", "Review", t, () => this.startAgent("review"), { icon: "brief", enabled: i.body !== undefined, tooltip: "Start a read-only review" })))

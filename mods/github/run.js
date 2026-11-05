@@ -4,6 +4,7 @@ import { theme, closeOverlay, setShared } from "herdr";
 import { primer, glyph, spinner, ago, duration, openUrl, runState, glyphOf, button } from "./ui.js";
 import { ghJson, gh, failedLog, localState } from "./gh.js";
 import { runBrief } from "./brief.js";
+import { openBriefs, savedTemplates } from "./briefs.js";
 import { copied, pickAgent } from "./actions.js";
 
 // One workflow run: its jobs and steps, the failing log, and what to do about it.
@@ -40,7 +41,7 @@ export class RunView {
     cx.notify();
   }
 
-  brief() { return runBrief(this.run, { jobs: this.jobs ?? [], log: this.log ?? "", local: this.local ? { ...this.local, ...this.localState } : null }); }
+  brief() { return runBrief(this.run, { jobs: this.jobs ?? [], log: this.log ?? "", local: this.local ? { ...this.local, ...this.localState } : null, templates: savedTemplates() }); }
 
   job(j, t, cx) {
     const p = primer(t), [g, color] = runState(j, p), open = Boolean(this.open[j.name]);
@@ -75,7 +76,8 @@ export class RunView {
           .child(button("github", "", t, () => openUrl(r.url), { icon: "external", tooltip: "Open on GitHub" }))
           .when(failing, (e) => e.child(button("rerun", "Re-run failed jobs", t, (_e, cx) => this.rerun(cx, true), { icon: "refresh", enabled: !this.busy })))
           .when(r.status === "completed" && !failing, (e) => e.child(button("rerun-all", "Re-run", t, (_e, cx) => this.rerun(cx, false), { icon: "refresh", enabled: !this.busy })))
-          .when(failing, (e) => e.child(button("brief", "Copy brief", t, (_e, cx) => copied(cx, this.brief(), "CI brief copied", `${r.workflowName} · ${r.headBranch}`), { icon: "brief" }))
+          .when(failing, (e) => e.child(button("templates", "", t, () => openBriefs({ kind: "run", data: this.run, jobs: this.jobs ?? [], log: this.log ?? "", local: this.local ? { ...this.local, ...this.localState } : null }), { icon: "pencil", tooltip: "Edit the brief templates, previewed on this run" }))
+            .child(button("brief", "Copy brief", t, (_e, cx) => copied(cx, this.brief(), "CI brief copied", `${r.workflowName} · ${r.headBranch}`), { icon: "brief" }))
             .child(button("agent", "Fix with agent", t, () => pickAgent({ name: `CI ${r.workflowName} ${r.repo.split("/")[1]}`, brief: this.brief(), folder: this.local?.folder ?? null, space: this.local?.space ?? null }), { primary: true, icon: "agent" })))
           .child(button("close", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" })))
         .child(h_flex().gap(10).items_center().child(glyphOf(g, 22, color, t)).child(div().flex_1().min_w(0).text_size(24).truncate().child(r.displayTitle)))

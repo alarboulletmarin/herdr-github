@@ -4,6 +4,7 @@ import { spaces, panes, focused, run, layout, theme, openOverlay, closeOverlay, 
 import { primer, glyph, spinner, ago, day, openUrl, issueState, prState, runState, checksOf, glyphOf, labelChip, button, counter, blankslate, skeleton, badge } from "./ui.js";
 import { gh, ghJson, account, repoOf, checkouts, load, localState, ROOTS } from "./gh.js";
 import { issueBrief, prReviewBrief, prFixBrief } from "./brief.js";
+import { BriefEditor, openBriefs, savedTemplates } from "./briefs.js";
 import { Viewer } from "./viewer.js";
 import { RunView } from "./run.js";
 import { Board, renderStageMenu } from "./board.js";
@@ -66,6 +67,7 @@ export default class GitHub extends View {
     if (pr.copyMenu) { this.copying = { items: pr.copyMenu, overlay: pr.overlay }; return; }
     if (pr.picker) { this.initPicker(pr.picker, pr.overlay, cx); return; }
     if (pr.create) { this.initCreate(pr.create, pr.overlay, cx); return; }
+    if (pr.briefs) { this.briefs = new BriefEditor(pr.briefs, pr.overlay, cx); return; }
 
     // d: lists held whole bodies and a number in `comments` (the dialog wants the array): drop them.
     try { for (let n = localStorage.length; n--;) { const k = localStorage.key(n); if (k?.startsWith("d:")) localStorage.removeItem(k); } } catch { /* no key(): they stay */ }
@@ -87,7 +89,7 @@ export default class GitHub extends View {
     });
     cx.timer.every(SYNC, (cx) => { if (!hidden()) this.refresh(cx, true); });
     cx.timer.every(LIVE, (cx) => { if (!hidden() && this.tab === "actions" && this.items()?.some((r) => r.status !== "completed")) this.refresh(cx, true); });
-    // keys.json: "alt-g i": "github.issues", or github.prs|actions|milestones|projects|repo|repos|refresh|open|switch|all|follow.
+    // keys.json: "alt-g i": "github.issues", or github.prs|actions|milestones|projects|repo|repos|refresh|open|switch|all|follow|board|briefs.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
@@ -96,6 +98,7 @@ export default class GitHub extends View {
         else if (c === "open") this.openFirst();
         else if (c === "switch" && !this.fixed) this.openPicker();
         else if (c === "board" && this.repo() && !this.all()) this.openBoard();
+        else if (c === "briefs") openBriefs();
         else if (c === "all" || c === "follow") this.setPin(this.where().space, c === "all" ? "all" : null, cx);
         cx.notify();
       }
@@ -200,10 +203,10 @@ export default class GitHub extends View {
       : "number,title,body,author,state,labels,assignees,comments,url,milestone";
     const full = { ...await ghJson([kind === "pr" ? "pr" : "issue", "view", String(item.number), "-R", item.repo, "--json", fields]), repo: item.repo };
     if (kind === "pr") full.checks = checksOf(full);
-    const l = this.locals[item.repo], local = l ? { ...l, ...(await localState(l.folder) ?? {}) } : null;
-    if (kind !== "pr") return issueBrief(full, { local });
-    if (mode === "copy") return [["Copy review brief", prReviewBrief(full, { local }), "Review · read-only"], ["Copy fix brief", prFixBrief(full, { local }), "Fix checks and requested changes"]];
-    return mode === "review" ? prReviewBrief(full, { local }) : prFixBrief(full, { local });
+    const l = this.locals[item.repo], local = l ? { ...l, ...(await localState(l.folder) ?? {}) } : null, o = { local, templates: savedTemplates() };
+    if (kind !== "pr") return issueBrief(full, o);
+    if (mode === "copy") return [["Copy review brief", prReviewBrief(full, o), "Review · read-only"], ["Copy fix brief", prFixBrief(full, o), "Fix checks and requested changes"]];
+    return mode === "review" ? prReviewBrief(full, o) : prFixBrief(full, o);
   }
   copyBrief(item, kind, cx) {
     notify({ title: "Preparing brief…", body: `${item.repo}#${item.number}`, timeout: 1500 });
@@ -500,6 +503,7 @@ export default class GitHub extends View {
         .child(glyph("chevron-down", 14, t.muted))
         .when(pinned && !all, (x) => x.child(div().flex_none().text_size(10.5).text_color(t.dim).child("pinned"))))
       .child(e.loading ? div().px(7).child(spinner(14, t.muted)) : button("refresh", "", t, (_e, cx) => this.refresh(cx), { icon: "refresh", invisible: true, tooltip: "Refresh" }))
+      .child(button("briefs", "", t, () => openBriefs(), { icon: "brief", invisible: true, tooltip: "Brief templates: what Copy brief and the agents receive" }))
       .when(Boolean(repo) && !all, (x) => x.child(button("board", "", t, () => this.openBoard(), { icon: "project", invisible: true, tooltip: "Board: To do, In progress, In review, Done" }))
         .child(button("new-issue", "", t, () => this.create(), { icon: "plus", invisible: true, tooltip: "New issue" }))
         .child(button("open-gh", "", t, () => openUrl(`https://github.com/${repo}${{ issues: "/issues", prs: "/pulls", actions: "/actions", milestones: "/milestones", projects: "/projects" }[this.shownTab()] ?? ""}`), { icon: "external", invisible: true, tooltip: "Open on GitHub" })));
@@ -538,6 +542,7 @@ export default class GitHub extends View {
     if (this.viewer) return this.viewer.render(cx);
     if (this.runView) return this.runView.render(cx);
     if (this.board) return this.board.render(cx);
+    if (this.briefs) return this.briefs.render(cx);
     if (this.stageMenu) return renderStageMenu(this.stageMenu.spec, this.stageMenu.overlay, t);
     if (this.agentMenu) return this.agentMenu.render(cx, t);
     if (this.copying) return renderCopyMenu(this.copying.items, this.copying.overlay, t);
