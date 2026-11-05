@@ -17,6 +17,9 @@ export function copied(cx, text, title, body) {
   notify({ title, body, level: "success", timeout: 2500 });
 }
 
+const remembered = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* memory only */ } };
+
 // The agent menu: a popup of this mod listing the installed agents, under the button that asked.
 // task: { name, brief, folder (the local clone), space, ref, work?: { kind, number, title, labels, headRefName } }.
 export function pickAgent(task) {
@@ -119,8 +122,10 @@ export class AgentMenu {
     this.task = task; this.overlay = overlay; this.agents = null;
     // A worktree of its own when there is a clone to make it from and a branch to name it by (search results carry no PR branch).
     this.branch = task.folder && task.work && task.ref ? branchFor(task.work, slug) ?? null : null;
-    this.isolate = Boolean(this.branch);
-    cx.spawn(async (cx) => { this.agents = (await knownAgents().catch(() => [])).filter((a) => a.installed && a.run?.length); cx.notify(); });
+    this.isolate = Boolean(this.branch) && remembered("agent:isolate") !== "0";
+    // The last agent started comes first, so the usual pick is the first row.
+    const last = remembered("agent:last");
+    cx.spawn(async (cx) => { this.agents = (await knownAgents().catch(() => [])).filter((a) => a.installed && a.run?.length).sort((a, b) => (b.name === last) - (a.name === last)); cx.notify(); });
   }
   render(cx, t) {
     const list = this.agents;
@@ -148,6 +153,8 @@ export class AgentMenu {
   // The menu stays open while the worktree is made (its task would end with it), then starts the agent.
   start(agent, cx) {
     if (this.busy) return;
+    remember("agent:last", agent.name);
+    if (this.branch) remember("agent:isolate", this.isolate ? "1" : "0");
     if (!this.isolate) { launch(agent, this.task); return closeOverlay(this.overlay); }
     this.busy = "Preparing the worktree…"; this.error = null; cx.notify();
     cx.spawn(async (cx) => {
