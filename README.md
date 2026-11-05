@@ -9,7 +9,7 @@ A [Herdr](https://herdr.dev) layout: Herdr's `main` layout with a GitHub panel b
 - **CI**: runs, jobs and steps, the trimmed failure log, re-run.
 - **Agent briefs** that make the agent read the repository's own conventions first, stop on a plan for large work, and never push or comment without you.
 - **Where work stands**: To do, In progress (agent working or waiting), In review (a linked pull request), Done, on each row and in a board with four columns.
-- **Changes, the Zed way**: a tree of changes with staging per file, folder or hunk, commit, amend, uncommit, push, pull, stash, branches, and the commit graph.
+- **Changes, the Zed way**: a tree of changes with staging per file, folder or hunk, commit with amend, sign off or skip hooks, uncommit, fetch, pull (or rebase), push (to a remote, or forced with a lease), stash, branch switching that carries or stashes local changes, and the commit graph.
 - **Empty states** for everything: gh missing or signed out, no repository here, nothing open, a missing token scope.
 
 ## Add it
