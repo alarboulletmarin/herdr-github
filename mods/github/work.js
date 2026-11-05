@@ -23,7 +23,7 @@ export function stageOf(item, mark, agents = [], kind = item.headRefName !== und
 }
 
 // Worktrees prepared by launch() live on this machine; the git mod uses null for local execution.
-export const changesOf = (mark, s) => mark?.folder && s.stage === "review" && s.why === "Agent finished" ? { root: mark.folder, on: null, range: "origin/HEAD..HEAD" } : null;
+export const changesOf = (mark, s) => mark?.folder && s.stage === "review" && s.why === "Agent finished" ? { root: mark.folder, on: null, range: `${mark.base ?? "origin/HEAD"}..HEAD` } : null;
 
 // Closed or merged, its worktree still there and no agent left in it: the worktree can go.
 export const cleanupOf = (mark, s, agents = []) => Boolean(mark?.folder) && /^(Merged|Closed)$/.test(s.why ?? "") && !agentOf(mark, agents);

@@ -67,7 +67,7 @@ export class History {
     return v_flex().id("history").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h_flex().flex_none().h(48).px(16).gap(8).items_center().border_b(1).border_color(t.border)
         .child(glyph("history", 15, t.muted)).child(div().font_semibold().child("History")).child(div().text_size(12).text_color(t.muted).child(this.repo.root))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.ansi1).child(this.error ?? this.note ?? ""))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(this.error ? t.ansi1 : t.muted).child(this.error ?? this.note ?? ""))
         .when(this.loading, (e) => e.child(spinner(13, t.muted)))
         .when(Boolean(this.range) && !this.all, (e) => e.child(button("scope", this.scoped ? `Since ${this.range.split("..")[0]}` : "Whole branch", t, (_e, cx) => { this.scoped = !this.scoped; this.note = null; this.picked = null; this.load(cx); }, { small: true, icon: "history", tooltip: "Only the commits added since the base, or the whole branch" })))
         .child(button("all", this.all ? "All branches" : "This branch", t, (_e, cx) => { this.all = !this.all; this.load(cx); }, { small: true, icon: "branch", tooltip: "Show every branch, or the checked-out one" }))

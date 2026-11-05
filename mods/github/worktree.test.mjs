@@ -27,7 +27,7 @@ try {
 
   const task = { folder: clone, ref: "me/proj#12", work: { kind: "issue", number: 12, title: "Export a note", labels: ["bug"] } };
   const wt = await prepareWorktree(task);
-  assert.deepEqual(wt, { folder: join(top, "home/.herdr/worktrees/proj/me-issue-12"), branch: "fix/12-export-a-note", base: "origin/main", reused: false });
+  assert.deepEqual(wt, { folder: join(top, "home/.herdr/worktrees/proj/me-issue-12"), branch: "fix/12-export-a-note", base: "origin/main", from: "origin/main", reused: false });
   assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "HEAD"), "fix/12-export-a-note");
   assert.equal(sh(clone, "status", "--porcelain"), "M a", "the clone keeps its changes and its branch");
   assert.equal(sh(clone, "rev-parse", "--abbrev-ref", "HEAD"), "main");
@@ -38,7 +38,7 @@ try {
   // The branch exists but its worktree was removed: checked out again, not recreated.
   sh(clone, "worktree", "remove", "--force", wt.folder);
   const back = await prepareWorktree(task);
-  assert.equal(back.reused, true); assert.equal(back.base, null); assert.ok(existsSync(back.folder));
+  assert.equal(back.reused, true); assert.equal(back.base, null); assert.equal(back.from, null); assert.ok(existsSync(back.folder));
 
   // Deleted by hand (rm -rf, not git worktree remove): pruned and made again, not handed out as a missing folder.
   rmSync(back.folder, { recursive: true, force: true });
@@ -58,7 +58,7 @@ try {
   // No origin/HEAD (offline, or never set): the clone's current branch is the base.
   sh(clone, "remote", "set-head", "origin", "--delete"); sh(clone, "config", "remote.origin.followRemoteHEAD", "never"); // git ≥ 2.48 would recreate it on fetch
   const other = await prepareWorktree({ ...task, ref: "me/proj#13", work: { kind: "issue", number: 13, title: "Other", labels: [] } });
-  assert.equal(other.base, "main"); assert.equal(other.branch, "feat/13-other");
+  assert.equal(other.base, "main"); assert.equal(other.from, "main", "Changes counts from main here"); assert.equal(other.branch, "feat/13-other");
 
   { // removeWorktree, on a fresh clone with origin/HEAD.
     const up = join(top, "up.git"), c = join(top, "c");

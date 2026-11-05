@@ -44,7 +44,8 @@ export async function prepareWorktree({ folder, ref, work }) {
   await git(["worktree", "prune"]); // forgets worktrees whose folder was deleted by hand
   const known = (await git(["worktree", "list", "--porcelain"])).split("\n").some((l) => l === `worktree ${path}`);
   // Its branch as it is, which may be pr-N after a fallback.
-  if (known) return { folder: path, branch: await git(["rev-parse", "--abbrev-ref", "HEAD"], path), base: null, reused: true };
+  // from: the ref it started from, what Changes counts the agent's commits from (null when unknown: reused).
+  if (known) return { folder: path, branch: await git(["rev-parse", "--abbrev-ref", "HEAD"], path), base: null, from: null, reused: true };
   await git(["fetch", "--quiet", "origin"]).catch(() => null); // offline: the local refs will do
   const base = await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => git(["rev-parse", "--abbrev-ref", "HEAD"]));
   if (work.kind === "pr") {
@@ -56,13 +57,13 @@ export async function prepareWorktree({ folder, ref, work }) {
         await git(["worktree", "remove", "--force", path]).catch(() => null);
         throw new Error((again.stderr || r.stderr).trim() || "gh pr checkout failed");
       }
-      return { folder: path, branch: `pr-${work.number}`, base: null, reused: false };
+      return { folder: path, branch: `pr-${work.number}`, base: null, from: base, reused: false };
     }
-    return { folder: path, branch, base: null, reused: false };
+    return { folder: path, branch, base: null, from: base, reused: false };
   }
   const exists = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).then(() => true, () => false);
   await git(exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, base]);
-  return { folder: path, branch, base: exists ? null : base, reused: exists };
+  return { folder: path, branch, base: exists ? null : base, from: exists ? null : base, reused: exists };
 }
 
 // Removes an agent's worktree, then its branch if origin's default branch holds it (merged, freshly fetched).
@@ -107,7 +108,7 @@ export function launch(agent, { name, brief, folder, space, ref }, wt = null) {
   const args = { name: name.slice(0, 48), argv: agent.run, task: wt ? worktreeNote(wt) + brief : brief };
   const home = space ?? spaces().find((s) => !s.machine && folder && s.folder === folder)?.id ?? spaces().find((s) => s.active)?.id;
   if (home) args.space = home;
-  if (ref) setWork(ref, "doing", { by: "agent", tab: args.name, ...(wt ? { folder: wt.folder, branch: wt.branch, space: home ?? null } : {}) });
+  if (ref) setWork(ref, "doing", { by: "agent", tab: args.name, ...(wt ? { folder: wt.folder, branch: wt.branch, space: home ?? null, base: wt.from ?? (shared("github.work") ?? {})[ref]?.base ?? null } : {}) });
   if (wt) args.folder = wt.folder; else if (folder) args.folder = folder;
   run("tab.new", args);
   notify({ title: `${agent.name} started`, body: name, level: "success", timeout: 3000 });

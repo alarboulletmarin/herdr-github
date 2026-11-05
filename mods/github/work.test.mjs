@@ -74,7 +74,8 @@ assert.equal(agentOf({ folder: "/x", space: null }, [{ space: "vps/s1", cwd: "/x
 // Changes follows the finished agent's worktree, including a cwd below its root.
 for (const status of ["done", "idle"]) {
   const s = stageOf(open, wt, [{ ...there, status }]);
-  assert.deepEqual(changesOf(wt, s), { root: wt.folder, on: null, range: "origin/HEAD..HEAD" });
+  assert.deepEqual(changesOf(wt, s), { root: wt.folder, on: null, range: "origin/HEAD..HEAD" }, "no base recorded (older marks)");
+  assert.equal(changesOf({ ...wt, base: "main" }, s).range, "main..HEAD", "the base the worktree started from");
 }
 for (const status of ["working", "blocked"]) assert.equal(changesOf(wt, stageOf(open, wt, [{ ...there, status }])), null);
 assert.equal(changesOf(null, stageOf(open)), null);
