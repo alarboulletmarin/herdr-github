@@ -7,7 +7,7 @@ A [Herdr](https://herdr.dev) layout: Herdr's `main` layout with a GitHub panel b
 - **Issues and pull requests** with their states, labels, checks and reviews.
 - **A github.com-style view**: the conversation with pictures and events, comment, close or reopen, labels, assignees, the merge box.
 - **CI**: runs, jobs and steps, the trimmed failure log, re-run.
-- **Agent briefs** that make the agent read the repository's own conventions first, stop on a plan for large work, and never push or comment without you.
+- **Agent briefs** that make the agent read the repository's own conventions first, stop on a plan for large work, and never push or comment without you. Each brief is a template you can edit in the panel, with a live preview.
 - **Where work stands**: To do, In progress (agent working or waiting), In review (a linked pull request), Done, on each row and in a board with four columns.
 - **Changes, the Zed way**: a tree of changes with staging per file, folder or hunk, commit with amend, sign off or skip hooks, uncommit, fetch, pull (or rebase), push (to a remote, or forced with a lease), stash, branch switching that carries or stashes local changes, and the commit graph.
 - **Empty states** for everything: gh missing or signed out, no repository here, nothing open, a missing token scope.
