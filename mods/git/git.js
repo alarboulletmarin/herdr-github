@@ -7,15 +7,29 @@ const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.a
 // File names are names, not patterns: "[a].txt" must not also mean "a.txt".
 const LITERAL = ["--literal-pathspecs"];
 
+// Race without cancelling exec: a late answer is consumed but cannot settle twice.
+export function commandAnswer(work, timer, command, ms = 30000) {
+  if (!timer) return work();
+  return new Promise((resolve, reject) => {
+    const alarm = timer.after(ms, () => reject(new Error(`git ${command}: no answer after ${ms / 1000} s. Herdr's command runner may be stuck: restart the window.`)));
+    Promise.resolve().then(work).then(resolve, reject).finally(() => alarm.cancel());
+  });
+}
+
+// How long a command may take before the panel lets go. Hooks run on commit, push, pull, switch…:
+// a pre-commit that runs the tests must not read as a failure while it still commits. Reads stay short.
+const HOOKED = new Set(["commit", "push", "pull", "merge", "rebase", "switch", "checkout", "stash", "am", "cherry-pick", "revert"]);
+export const patience = (args) => { const verb = args.find((a) => !a.startsWith("-") && !a.includes("=")); return HOOKED.has(verb) ? 600000 : verb === "fetch" ? 90000 : 30000; };
+
 // One repository: its top folder and the machine it lives on (null: this one).
 export class Repo {
-  constructor(root, on) { this.root = root; this.on = on; }
-  static async at(cwd, on) {
-    const r = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
-    return r.code === 0 ? new Repo(r.stdout.trim(), on) : null;
+  constructor(root, on, timer = null) { this.root = root; this.on = on; this.timer = timer; }
+  static async at(cwd, on, timer = null) {
+    const r = await commandAnswer(() => exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }), timer, "rev-parse");
+    return r.code === 0 ? new Repo(r.stdout.trim(), on, timer) : null;
   }
   async run(args, read = false) {
-    const r = await exec("git", [...LITERAL, ...(read ? READ : []), ...args], { cwd: this.root, on: this.on });
+    const r = await commandAnswer(() => exec("git", [...LITERAL, ...(read ? READ : []), ...args], { cwd: this.root, on: this.on }), this.timer, args[0], patience(args));
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `git ${args[0]} failed`);
     return r.stdout;
   }
@@ -30,7 +44,22 @@ export class Repo {
     const last = branch.oid ? await this.read(["log", "-1", "--format=%h%x1f%s%x1f%ar%x1f%P"]).then((o) => { const [short, subject, when, parents] = o.trim().split("\x1f"); return { short, subject, when, root: !parents }; }) : null;
     // A stash is named by its position (stash@{0}), which moves; its oid lets a confirm check it is still the same one.
     const stashes = (await this.read(["stash", "list", "--format=%gd%x1f%s%x1f%cr%x1f%H"]).catch(() => "")).split("\n").filter(Boolean).map((l) => { const [ref, subject, when, oid] = l.split("\x1f"); return { ref, subject, when, oid }; });
-    return { branch, files, last, stashes };
+    return { branch, files, last, stashes, remotes: await this.remotes() };
+  }
+
+  async remotes() {
+    const out = await this.read(["remote", "-v"]), remotes = new Map();
+    for (const line of out.split("\n")) {
+      const m = /^(\S+)\s+(.*?) \((fetch|push)\)$/.exec(line);
+      if (m) { const r = remotes.get(m[1]) ?? { name: m[1] }; r[m[3]] = m[2]; remotes.set(m[1], r); }
+    }
+    return [...remotes.values()];
+  }
+  sync(action, { remote = null, upstream = false } = {}) {
+    if (action === "fetch" || action === "fetch-from") return this.run(["fetch", "--prune", ...(remote ? [remote] : [])]);
+    if (action === "fetch-all") return this.run(["fetch", "--all", "--prune"]);
+    if (action === "pull" || action === "pull-rebase") return this.run(["pull", ...(action === "pull-rebase" ? ["--rebase"] : [])]);
+    return this.run(["push", ...(action === "force-push" ? ["--force-with-lease"] : []), ...(remote && !upstream ? ["-u"] : []), ...(remote ? [remote, "HEAD"] : [])]);
   }
 
   // Staging: whole paths (files or folders), or one hunk through git apply. The patch goes as an
@@ -43,7 +72,7 @@ export class Repo {
   }
   async applyHunk(header, hunk, { reverse = false, cached = true } = {}) {
     const args = ["apply", ...(cached ? ["--cached"] : []), ...(reverse ? ["-R"] : []), "-"].join(" ");
-    const r = await exec("sh", ["-c", `printf "%s" "$1" | git ${args}`, "sh", patchOf(header, hunk)], { cwd: this.root, on: this.on });
+    const r = await commandAnswer(() => exec("sh", ["-c", `printf "%s" "$1" | git ${args}`, "sh", patchOf(header, hunk)], { cwd: this.root, on: this.on }), this.timer, "apply");
     if (r.code !== 0) throw new Error(r.stderr.trim() || "git apply failed");
   }
   // Throws away a file's changes: tracked ones back to HEAD (index and tree), untracked ones deleted.

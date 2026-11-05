@@ -11,7 +11,7 @@ const LINES = 3000; // per side of a file; more says so
 // then staged ones. Clicking a hunk's header stages or unstages that hunk alone. { root, on, path? }.
 export class Diff {
   constructor({ root, on, path }, overlay, cx) {
-    this.repo = new Repo(root, on); this.overlay = overlay; this.path = path ?? null; this.files = []; this.rows = []; this.width = 600;
+    this.repo = new Repo(root, on, cx.timer); this.overlay = overlay; this.path = path ?? null; this.files = []; this.rows = []; this.width = 600;
     this.reload(cx);
     cx.timer.every(10000, (cx) => { if (!this.busy) this.reload(cx); });
   }
