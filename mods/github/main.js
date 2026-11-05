@@ -210,7 +210,7 @@ export default class GitHub extends View {
     cx.spawn(async (cx) => {
       try {
         if (kind === "pr") copyMenu(await this.brief(item, kind, "copy"));
-        else { copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`); setWork(ref(item), "doing", { by: "brief" }); }
+        else copied(cx, await this.brief(item, kind), "Brief copied", `${item.repo}#${item.number} · ready to paste into an agent`);
       }
       catch (e) { notify({ title: "Brief failed", body: String(e?.message ?? e), level: "error" }); }
     });

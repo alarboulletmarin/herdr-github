@@ -8,7 +8,7 @@ assert.equal(ref(open), "o/r#7");
 assert.equal(stageOf(open).stage, "todo", "nothing known: to do");
 assert.equal(stageOf({ ...open, state: "CLOSED" }, { stage: "doing", by: "hand" }).stage, "done", "closed wins over a hand mark");
 assert.equal(stageOf({ ...open, state: "MERGED", headRefName: "x" }).why, "Merged");
-assert.deepEqual(stageOf(open, { stage: "doing", by: "brief" }), { stage: "doing", why: "Brief copied" });
+assert.deepEqual(stageOf(open, { stage: "doing", by: "brief" }), { stage: "todo", why: null }, "a copied brief (old mark) is not work started");
 assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, []).why, "Agent started", "agent tab gone: still in progress");
 const agent = { tab_name: "#7 r", status: "working" };
 assert.equal(stageOf(open, { stage: "doing", by: "agent", tab: "#7 r" }, [agent]).why, "Agent working");
@@ -25,8 +25,8 @@ assert.equal(stageOf({ ...open, headRefName: "b", isDraft: false }).stage, "revi
 assert.equal(stageOf({ ...open, state: "open" }).stage, "todo", "lowercase state (search results)");
 assert.equal(stageOf({ ...open, state: "closed" }).stage, "done", "lowercase closed");
 
-const m = marked({}, "o/r#7", "doing", { by: "brief" });
-assert.equal(m["o/r#7"].stage, "doing"); assert.equal(m["o/r#7"].by, "brief");
+const m = marked({}, "o/r#7", "doing", { by: "agent" });
+assert.equal(m["o/r#7"].stage, "doing"); assert.equal(m["o/r#7"].by, "agent");
 assert.deepEqual(marked(m, "o/r#7", null), {}, "null removes");
 assert.deepEqual(marked(undefined, "a#1", null), {}, "no marks yet");
 const before = { "a#1": { stage: "doing" } }; marked(before, "b#2", "todo");
@@ -39,7 +39,7 @@ const items = [
   { repo: "o/r", number: 5, state: "OPEN", headRefName: "fix", isDraft: false, updatedAt: "2026-01-05" },
   { repo: "o/r", number: 6, state: "OPEN", headRefName: "wip", isDraft: true, updatedAt: "2026-01-06" },
 ];
-const c = columns(items, { "o/r#4": { stage: "doing", by: "brief" } });
+const c = columns(items, { "o/r#4": { stage: "doing", by: "agent" }, "o/r#1": { stage: "doing", by: "brief" } });
 const nums = (k) => c[k].map((x) => x.item.number);
 assert.deepEqual(nums("todo"), [1]);
 assert.deepEqual(nums("doing"), [6, 4], "newest first; draft PR in progress");

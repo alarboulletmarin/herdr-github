@@ -130,7 +130,6 @@ export class Viewer {
   copyBrief(cx) {
     if (this.pr()) return copyMenu([["Copy review brief", this.brief("review"), "Review · read-only"], ["Copy fix brief", this.brief("fix"), "Fix checks and requested changes"]]);
     copied(cx, this.brief(), "Brief copied", `${this.repo}#${this.number} · ready to paste into an agent`);
-    setWork(this.key(), "doing", { by: "brief" });
   }
   startAgent(mode = "fix") {
     const local = this.local();

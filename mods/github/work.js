@@ -1,6 +1,6 @@
 // Where an issue or pull request stands, beyond GitHub's open and closed: To do, In progress, In review, Done.
 // Marks live in shared("github.work"), so the panel, the dialogs and every copy see the same thing:
-// { "owner/repo#12": { stage: "doing", by: "agent" | "brief" | "hand", tab?: "#12 repo", at } }.
+// { "owner/repo#12": { stage: "doing", by: "agent" | "hand", tab?: "#12 repo", at } }.
 export const STAGES = [["todo", "To do"], ["doing", "In progress"], ["review", "In review"], ["done", "Done"]];
 export const ref = (item) => `${item.repo}#${item.number}`;
 
@@ -17,7 +17,8 @@ export function stageOf(item, mark, agents = [], kind = item.headRefName !== und
     : agent.status === "blocked" ? { stage: "doing", why: "Agent needs you", agent } : { stage: "review", why: "Agent finished", agent };
   if (kind === "pr") return item.isDraft ? { stage: "doing", why: "Draft" } : { stage: "review", why: "Open pull request" };
   if ((item.closedByPullRequestsReferences ?? []).length) return { stage: "review", why: `PR #${item.closedByPullRequestsReferences[0].number}` };
-  if (mark) return { stage: mark.stage ?? "doing", why: mark.by === "agent" ? "Agent started" : "Brief copied" };
+  // A copied brief is not work started; older "brief" marks are ignored.
+  if (mark && mark.by !== "brief") return { stage: mark.stage ?? "doing", why: "Agent started" };
   return { stage: "todo", why: null };
 }
 
