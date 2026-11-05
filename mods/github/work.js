@@ -72,8 +72,11 @@ export function worktreeNote({ folder, branch, base, reused }) {
 }
 // The agent on that item: the one working in its worktree; without a worktree, the tab it was started in
 // (a name, so two repositories called the same can mix up: the worktree is what makes it exact).
+// herdr: remote space ids have a machine/ prefix; this computer's have none.
+const machineOf = (space) => space?.includes("/") ? space.split("/")[0] : null;
 export function agentOf(mark, agents) {
-  // The same path can exist on another machine: its space tells them apart.
-  if (mark?.folder) return agents.find((a) => a.cwd && (!mark.space || a.space === mark.space) && (a.cwd === mark.folder || a.cwd.startsWith(`${mark.folder}/`))) ?? null;
+  // The same path can exist on another machine: the machine of its space tells them apart, not the space
+  // itself, so a tab moved to another space on the same machine is still found.
+  if (mark?.folder) return agents.find((a) => a.cwd && (!mark.space || machineOf(a.space) === machineOf(mark.space)) && (a.cwd === mark.folder || a.cwd.startsWith(`${mark.folder}/`))) ?? null;
   return mark?.tab ? agents.find((a) => a.tab_name === mark.tab) ?? null : null;
 }

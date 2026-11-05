@@ -65,8 +65,12 @@ assert.equal(agentOf(wt, [{ ...there, cwd: "/h/.herdr/worktrees/api/feat-7-xy" }
 assert.equal(agentOf({ stage: "doing", by: "agent", tab: "#7 api" }, [homonym]), homonym, "no worktree: the tab name, as before");
 assert.equal(agentOf(null, [there]), null);
 assert.equal(stageOf(open, { ...wt, folder: "/x" }, [{ status: "working", cwd: "/x" }]).why, "Agent working");
-assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }]), null, "the same path on another machine is not it");
-assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x" }, { space: "local", cwd: "/x", n: 1 }]).n, 1);
+assert.equal(agentOf({ folder: "/x", space: "s1" }, [{ space: "vps/s1", cwd: "/x" }]), null, "the same path on another machine is not it");
+assert.equal(agentOf({ folder: "/x", space: "s1" }, [{ space: "vps/s1", cwd: "/x" }, { space: "s1", cwd: "/x", n: 1 }]).n, 1);
+assert.equal(agentOf({ folder: "/x", space: "s1" }, [{ space: "s2", cwd: "/x", n: 2 }]).n, 2, "its tab moved to another space here: still found");
+assert.equal(agentOf({ folder: "/x", space: "vps/s1" }, [{ space: "vps/s3", cwd: "/x", n: 3 }]).n, 3, "moved between spaces of the same remote machine");
+assert.equal(agentOf({ folder: "/x", space: "vps/s1" }, [{ space: "box/s1", cwd: "/x" }, { space: "s1", cwd: "/x" }]), null, "another machine, or this one: not it");
+assert.equal(agentOf({ folder: "/x", space: null }, [{ space: "vps/s1", cwd: "/x", n: 4 }]).n, 4, "no space recorded: the folder alone, as before");
 // Changes follows the finished agent's worktree, including a cwd below its root.
 for (const status of ["done", "idle"]) {
   const s = stageOf(open, wt, [{ ...there, status }]);
