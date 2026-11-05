@@ -10,7 +10,7 @@ import { glyph, spinner, button, MONO } from "./ui.js";
 // ("origin/HEAD..HEAD"), only the commits it holds until "Whole branch" is picked.
 export class History {
   constructor({ root, on, range = null }, overlay, cx) {
-    this.repo = new Repo(root, on); this.overlay = overlay; this.all = false; this.range = range; this.scoped = Boolean(range); this.lines = null; this.picked = null; this.patch = [];
+    this.repo = new Repo(root, on, cx.timer); this.overlay = overlay; this.all = false; this.range = range; this.scoped = Boolean(range); this.lines = null; this.picked = null; this.patch = [];
     this.load(cx);
   }
   load(cx) {

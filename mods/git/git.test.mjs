@@ -7,12 +7,25 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 // "herdr" resolves to a module whose exec runs the program here.
-const stub = `import { execFile } from "child_process";
+const stub = `
+export const spaces = () => [{ active: true, folder: "never-answers" }], panes = () => [], focused = () => null;
+export const theme = () => ({}), props = () => ({}), shared = () => null, watchFolder = () => new Promise(() => {}), nextCommand = watchFolder;
+export const setShared = (key, value) => { globalThis.gitAsked = value; }, openOverlay = (spec) => { globalThis.gitOverlay = spec; }, closeOverlay = () => {}, readTextFile = () => null;
+export const notify = (notice) => { globalThis.gitNotice = notice; };
+import { execFile } from "child_process";
 export function exec(cmd, args = [], { cwd } = {}) {
+  if (cwd === "never-answers") return new Promise(() => {});
+  if (cwd === "late-answer") return new Promise((resolve) => { globalThis.gitLateAnswer = resolve; });
   return new Promise((ok) => execFile(cmd, args, { cwd, maxBuffer: 1 << 26 }, (e, stdout, stderr) => ok({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, stdout, stderr })));
 }`;
-registerHooks({ resolve: (spec, ctx, next) => spec === "herdr" ? { url: `data:text/javascript,${encodeURIComponent(stub)}`, shortCircuit: true } : next(spec, ctx) });
-const { Repo } = await import("./git.js");
+const gpui = "export class View {} export const div = () => {}, svg = () => {};";
+const base = "export const v_flex = () => {}, h_flex = () => {}, TextareaState = {}, Textarea = {}, InputState = {}, Input = {}, Scrollbar = {}, v_virtual_list = () => {};";
+registerHooks({ resolve: (spec, ctx, next) => {
+  const source = { herdr: stub, "gpui-kit": gpui, "gpui-base": base }[spec];
+  return source ? { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true } : next(spec, ctx);
+} });
+const { Repo, commandAnswer } = await import("./git.js");
+const { default: Git } = await import("./main.js");
 
 const made = [];
 function repo(files = {}, commit = true) {
@@ -26,6 +39,99 @@ function repo(files = {}, commit = true) {
 const staged = (sh) => sh("diff", "--cached", "--name-only").split("\n").filter(Boolean).sort();
 
 try {
+  { // A stuck runner rejects, releases its caller, and ignores a late answer.
+    const alarms = [], timer = { after(ms, fire) { const alarm = { ms, fire, cancelled: false }; alarms.push(alarm); return { cancel() { alarm.cancelled = true; } }; } };
+    const r = new Repo("never-answers", null, timer);
+    for (const [command, ms] of [["fetch", 90000], ["pull", 90000], ["push", 90000], ["status", 30000]]) {
+      let busy = true;
+      const result = r.run([command]).finally(() => { busy = false; });
+      const rejected = assert.rejects(result, new RegExp(`git ${command}: no answer after ${ms / 1000} s.*restart the window`));
+      assert.equal(alarms.at(-1).ms, ms); alarms.at(-1).fire(); await rejected; assert.equal(busy, false);
+    }
+    let applied = false;
+    const late = new Repo("late-answer", null, timer).run(["fetch"]).then(() => { applied = true; });
+    const rejected = assert.rejects(late, /no answer after 90 s/);
+    await Promise.resolve(); alarms.at(-1).fire(); await rejected;
+    globalThis.gitLateAnswer({ code: 0, stdout: "late", stderr: "" });
+    await new Promise((resolve) => setImmediate(resolve)); assert.equal(applied, false);
+    const ok = commandAnswer(() => Promise.resolve("ok"), timer, "status");
+    assert.equal(await ok, "ok"); await Promise.resolve(); assert.equal(alarms.at(-1).cancelled, true);
+    await assert.rejects(commandAnswer(() => { throw new Error("cannot start"); }, timer, "status"), /cannot start/);
+  }
+  { // The panel releases busy, refreshes again, and cannot apply an expired command's callback.
+    const alarms = [], tasks = [], timer = { after(ms, fire) { const alarm = { ms, fire }; alarms.push(alarm); return { cancel() {} }; } };
+    const cx = { timer, notify() {}, spawn(work) { tasks.push(work(cx)); } };
+    const panel = new Git(); panel.repo = new Repo("late-answer", null, timer);
+    let refreshed = 0, applied = false; panel.refresh = () => { refreshed++; };
+    panel.act("Fetching…", cx, (r) => r.run(["fetch"]), () => { applied = true; });
+    await Promise.resolve(); const firstAnswer = globalThis.gitLateAnswer;
+    assert.equal(panel.busy, "Fetching…"); assert.equal(alarms.at(-1).ms, 90000);
+    alarms.at(-1).fire(); await tasks.at(-1);
+    assert.equal(panel.busy, null); assert.equal(refreshed, 1); assert.match(panel.error, /git fetch: no answer after 90 s/);
+    assert.equal(globalThis.gitNotice.level, "error");
+    panel.act("Staging…", cx, (r) => r.run(["add", "a"])); await Promise.resolve();
+    const secondAnswer = globalThis.gitLateAnswer;
+    firstAnswer({ code: 0, stdout: "late", stderr: "" }); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(applied, false); assert.equal(panel.busy, "Staging…");
+    secondAnswer({ code: 0, stdout: "", stderr: "" }); await tasks.at(-1);
+    assert.equal(panel.busy, null); assert.equal(refreshed, 2);
+    // A refresh on the same stuck runner also leaves loading, ready for the next timer tick.
+    delete panel.refresh; panel.repo = new Repo("never-answers", null, timer);
+    panel.refresh(cx); assert.equal(panel.loading, true); assert.equal(alarms.at(-1).ms, 30000);
+    alarms.at(-1).fire(); await tasks.at(-1); assert.equal(panel.loading, false);
+  }
+  { // Menu availability and popup dimensions follow the repository state without new exec calls.
+    const panel = new Git(); panel.repo = new Repo("unused", "machine");
+    panel.st = { branch: { head: "main", upstream: null }, remotes: [], stashes: [], files: [] };
+    panel.openMore(); let menu = globalThis.gitOverlay.props.menu;
+    for (const action of ["fetch", "pull", "push", "pick-push", "force-ask"]) {
+      const row = menu.items.find((item) => item?.[0] === action); assert.equal(row[3], false); assert.match(row[5], /remote/);
+    }
+    panel.st.remotes = [{ name: "origin", fetch: "first", push: "push-first" }, { name: "second", fetch: "second" }];
+    panel.openMore(); menu = globalThis.gitOverlay.props.menu;
+    assert.ok(menu.items.some((item) => item?.[0] === "fetch-all"));
+    assert.equal(globalThis.gitOverlay.height, 12 + menu.items.reduce((h, item) => h + (item ? 32 : 9), 0));
+    assert.equal(menu.items.find((item) => item?.[0] === "pick-push")[3], true);
+    assert.match(menu.items.find((item) => item?.[0] === "push")[5], /No upstream/);
+    panel.openRemotes("push-to"); assert.equal(globalThis.gitOverlay.height, 76);
+    assert.deepEqual(globalThis.gitOverlay.props.menu.items.map((item) => [item[4], item[6]]), [["origin", "push-first"], ["second", "second"]]);
+    assert.equal(globalThis.gitOverlay.props.menu.on, "machine");
+    panel.st.branch.head = null; panel.openMore();
+    assert.match(globalThis.gitOverlay.props.menu.items.find((item) => item?.[0] === "pick-push")[5], /detached/);
+  }
+  { // Network actions use real bare remotes, with rebase and lease protection.
+    const origin = mkdtempSync(join(tmpdir(), "herdr-git-bare-")), second = mkdtempSync(join(tmpdir(), "herdr-git-bare-")); made.push(origin, second);
+    for (const dir of [origin, second]) execFileSync("git", ["init", "--bare", "-q", "-b", "main", dir]);
+    const { sh, r, write } = repo({ "a": "base\n" });
+    sh("remote", "add", "origin", origin); sh("remote", "add", "second", second);
+    assert.deepEqual((await r.remotes()).map((remote) => [remote.name, remote.fetch, remote.push]), [["origin", origin, origin], ["second", second, second]]);
+    await r.sync("push-to", { remote: "origin", upstream: false });
+    assert.equal(sh("rev-parse", "--abbrev-ref", "@{upstream}").trim(), "origin/main");
+    await r.sync("push-to", { remote: "second", upstream: true });
+    const other = repo({}, false);
+    other.sh("remote", "add", "origin", origin); other.sh("fetch", "-q", "origin"); other.sh("reset", "--hard", "origin/main");
+    other.write("remote-file", "remote\n"); other.sh("add", "-A"); other.sh("commit", "-qm", "remote change"); other.sh("push", "-q", "origin", "main");
+    write("local-file", "local\n"); sh("add", "-A"); sh("commit", "-qm", "local change");
+    const stale = sh("rev-parse", "origin/main").trim();
+    await assert.rejects(r.sync("force-push"), /stale info|rejected/);
+    assert.equal(sh("rev-parse", "origin/main").trim(), stale);
+    await r.sync("fetch-from", { remote: "origin" });
+    assert.equal(sh("rev-parse", "origin/main").trim(), other.sh("rev-parse", "HEAD").trim());
+    await r.sync("pull-rebase");
+    assert.equal(sh("log", "-2", "--format=%s").trim(), "local change\nremote change");
+    await r.sync("push");
+    sh("branch", "temporary"); await r.sync("push-to", { remote: "second", upstream: true });
+    sh("push", "-q", "second", "temporary"); await r.sync("fetch-from", { remote: "second" });
+    sh("push", "-q", "second", "--delete", "temporary");
+    // Recreate a stale tracking ref: fetch --prune must remove it.
+    sh("update-ref", "refs/remotes/second/temporary", "HEAD");
+    await r.sync("fetch-from", { remote: "second" });
+    assert.equal(sh("for-each-ref", "refs/remotes/second/temporary").trim(), "");
+    await r.sync("fetch-all");
+    assert.deepEqual((await r.status()).remotes.map((remote) => remote.name), ["origin", "second"]);
+    sh("branch", "--unset-upstream"); await r.sync("push-to", { remote: "second", upstream: false });
+    assert.equal(sh("rev-parse", "--abbrev-ref", "@{upstream}").trim(), "second/main");
+  }
   { // A partial stage previews and commits the index, not the newer working copy or other tracked edits.
     const { sh, r, write } = repo({ "café space.txt": "base\n", "other.txt": "base\n" });
     write("café space.txt", "staged\n"); sh("add", "café space.txt");

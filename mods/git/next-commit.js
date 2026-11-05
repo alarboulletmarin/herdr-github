@@ -8,7 +8,7 @@ import { glyph, spinner, button, ask, MONO } from "./ui.js";
 // Read-only: the message belongs to this preview; the panel runs its commit after the dialog closes.
 export class NextCommit {
   constructor({ root, on, message, amend }, overlay, cx) {
-    this.repo = new Repo(root, on); this.overlay = overlay; this.message = message; this.amend = amend;
+    this.repo = new Repo(root, on, cx.timer); this.overlay = overlay; this.message = message; this.amend = amend;
     this.files = []; this.rows = []; this.path = null; this.width = 600;
     this.load(cx);
   }

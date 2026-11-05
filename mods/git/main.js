@@ -59,7 +59,7 @@ export default class Git extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        const repo = this.repo?.root ? this.repo : await Repo.at(cwd, on);
+        const repo = this.repo?.root ? this.repo : await Repo.at(cwd, on, cx.timer);
         if (where() !== context) return;
         if (repo?.root !== this.repo?.root) this.switchMessage(repo?.root ?? null);
         this.repo = repo;
@@ -127,22 +127,30 @@ export default class Git extends View {
     this.act("Uncommitting…", cx, async (r) => { const msg = await r.read(["log", "-1", "--format=%B"]); await r.run(["reset", "--soft", "HEAD~1"]); return msg; },
       (msg) => { this.box.set_value(msg.trim()); this.typed = true; });
   }
-  sync(action, cx) {
-    const label = { fetch: "Fetching…", pull: "Pulling…", push: "Pushing…", publish: "Publishing…" }[action];
-    this.act(label, cx, async (r) => {
-      if (action === "fetch") return r.run(["fetch", "--prune"]);
-      if (action === "pull") return r.run(["pull"]);
-      if (action === "push") return r.run(["push"]);
-      const remote = (await r.read(["remote"])).split("\n").find(Boolean);
-      if (!remote) throw new Error("No remote to publish to: add one with git remote add");
-      return r.run(["push", "-u", remote, "HEAD"]);
-    }, () => action !== "fetch" && notify({ title: { pull: "Pulled", push: "Pushed", publish: "Published" }[action], body: this.st?.branch.head ?? "", level: "success", timeout: 2500 }));
+  sync(action, cx, remote = null) {
+    const b = this.st?.branch ?? {}, remotes = this.st?.remotes ?? [];
+    if (!remotes.length) return;
+    if (!["fetch", "fetch-from", "fetch-all"].includes(action) && !b.head) return;
+    if (["pull", "pull-rebase", "push", "force-push"].includes(action) && !b.upstream) return;
+    if (action === "publish") {
+      if (remotes.length > 1) return this.openRemotes("push-to");
+      remote = remotes[0].name;
+    }
+    const verb = action.startsWith("fetch") ? "Fetching…" : action.startsWith("pull") ? "Pulling…" : "Pushing…";
+    this.act(verb, cx, (r) => r.sync(action, { remote, upstream: Boolean(b.upstream) }), () => {
+      if (!action.startsWith("fetch")) notify({ title: action.startsWith("pull") ? "Pulled" : action === "publish" ? "Published" : "Pushed", body: b.head ?? "", level: "success", timeout: 2500 });
+    });
   }
   // What popups and dialogs asked for (shared "git.do"), once, for this repository only.
   perform({ action, arg }, cx) {
     const file = (path) => this.st?.files.find((f) => f.path === path);
     switch (action) {
-      case "fetch": case "pull": case "push": case "publish": return this.sync(action, cx);
+      case "fetch": case "fetch-all": case "pull": case "pull-rebase": case "push": case "force-push": case "publish": return this.sync(action, cx);
+      case "fetch-from": case "push-to": return this.sync(action, cx, arg);
+      case "pick-fetch": return this.openRemotes("fetch-from");
+      case "pick-push": return this.openRemotes("push-to");
+      case "review": return this.openDiff(null);
+      case "history": return this.openHistory();
       case "switch": return this.act(`Switching to ${arg}…`, cx, (r) => r.run(["switch", arg]));
       case "create": return this.act(`Creating ${arg}…`, cx, (r) => r.run(["switch", "-c", arg]));
       case "stash": return this.act("Stashing…", cx, (r) => r.run(["stash", "push", "--include-untracked", "-m", arg || `WIP on ${this.st?.branch.head ?? "HEAD"}`]));
@@ -162,12 +170,26 @@ export default class Git extends View {
   openNextCommit() { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { nextCommit: { ...this.spec(), message: this.box.value(), amend: this.amend } } }); }
   openHistory() { openOverlay({ mod: "git", kind: "dialog", width: 0.92, height: 0.9, props: { history: this.spec() } }); }
   openBranches() { openOverlay({ mod: "git", kind: "popup", width: 320, height: 420, at: under(320), props: { branches: { ...this.spec(), head: this.st?.branch.head } } }); }
+  openRemotes(action) {
+    const remotes = this.st?.remotes ?? [];
+    if (!remotes.length) return;
+    if (remotes.length === 1) { ask(this.repo.root, action, remotes[0].name); return; }
+    const items = remotes.map((r) => [action, r.name, action === "fetch-from" ? "arrow-down" : "arrow-up", true, r.name, null, (action === "fetch-from" ? r.fetch : r.push) ?? r.fetch]);
+    openOverlay({ mod: "git", kind: "popup", width: 380, height: 12 + items.length * 32, at: under(380), props: { menu: { ...this.spec(), kind: "remotes", items } } });
+  }
   openMore() {
-    const b = this.st?.branch ?? {}, stashes = this.st?.stashes ?? [], any = (this.st?.files.length ?? 0) > 0;
-    const items = [["fetch", "Fetch", "refresh"], ["pull", "Pull", "arrow-down", Boolean(b.upstream)], [b.upstream ? "push" : "publish", b.upstream ? "Push" : "Publish branch", "arrow-up", Boolean(b.head)],
+    const b = this.st?.branch ?? {}, stashes = this.st?.stashes ?? [], any = (this.st?.files.length ?? 0) > 0, remotes = this.st?.remotes ?? [];
+    const network = remotes.length > 0 && !this.busy, branch = network && Boolean(b.head), upstream = branch && Boolean(b.upstream);
+    const reason = !remotes.length ? "Add a remote first" : this.busy ? "A git command is running" : !b.head ? "HEAD is detached: switch to a branch" : !b.upstream ? "No upstream: use Push to… first" : null;
+    const items = [["fetch", "Fetch", "refresh", network, null, !network ? reason : null], ["pick-fetch", "Fetch from…", "refresh", network, null, !network ? reason : null],
+      ...(remotes.length > 1 ? [["fetch-all", "Fetch all", "refresh", network, null, !network ? reason : null]] : []),
+      ["pull", "Pull", "arrow-down", upstream, null, !upstream ? reason : null], ["pull-rebase", "Pull (rebase)", "arrow-down", upstream, null, !upstream ? reason : null],
+      ["push", "Push", "arrow-up", upstream, null, !upstream ? reason : null], ["pick-push", "Push to…", "arrow-up", branch, null, !branch ? reason : null],
+      ["force-ask", "Force push…", "arrow-up", upstream, null, !upstream ? reason : null],
+      null, ["review", "Review changes", "diff"], ["history", "History and graph", "history"],
       null, ["stash", "Stash all changes", "archive", any], ...(stashes.length ? [["pop", `Pop ${stashes[0].ref}`, "archive", true, stashes[0]]] : []),
       ...stashes.slice(0, 6).map((s) => ["stash-menu", `${s.ref} · ${s.subject}`, "clock", true, s])];
-    openOverlay({ mod: "git", kind: "popup", width: 300, height: 12 + items.reduce((h, i) => h + (i ? 32 : 9), 0), at: under(300), props: { menu: { kind: "more", root: this.repo.root, items } } });
+    openOverlay({ mod: "git", kind: "popup", width: 300, height: 12 + items.reduce((h, i) => h + (i ? 32 : 9), 0), at: under(300), props: { menu: { ...this.spec(), kind: "more", branch: b.head, upstream: b.upstream, items } } });
   }
   fileMenu(f) {
     const items = [["diff", "Open diff", "diff"], ["copy", "Copy path", "copy"], null, ["discard-ask", f.untracked ? "Delete this new file…" : "Discard changes…", "discard"]];
@@ -272,7 +294,7 @@ export default class Git extends View {
       .when(Boolean(b), (e) => e
         .child(this.loading && !this.busy ? div().px(6).child(spinner(13, t.dim)) : div())
         .child(button("history", "", t, () => this.openHistory(), { icon: "history", invisible: true, tooltip: "History and graph" }))
-        .child(button("sync", sync.label, t, (_e, cx) => this.sync(sync.action, cx), { icon: { pull: "arrow-down", push: "arrow-up", publish: "arrow-up" }[sync.action] ?? "refresh", enabled: !this.busy }))
+        .child(button("sync", sync.label, t, (_e, cx) => this.sync(sync.action, cx), { icon: { pull: "arrow-down", push: "arrow-up", publish: "arrow-up" }[sync.action] ?? "refresh", enabled: !this.busy && (this.st?.remotes?.length ?? 0) > 0, tooltip: this.st?.remotes?.length ? null : "Add a remote first" }))
         .child(button("more", "", t, () => this.openMore(), { icon: "more", invisible: true, tooltip: "Fetch, pull, push, stash" })));
   }
 
@@ -282,7 +304,7 @@ export default class Git extends View {
     this.filter = InputState.new({ placeholder: "Switch to or create a branch…" });
     this.filter.on("change", (_e, cx) => { this.picking.q = this.filter.value().trim(); cx.notify(); });
     this.filter.on("submit", () => this.pickBranch(this.picking.q, true));
-    cx.spawn(async (cx) => { try { this.picking.list = await new Repo(spec.root, spec.on).branches(); } catch (e) { this.picking.error = String(e?.message ?? e); } cx.notify(); });
+    cx.spawn(async (cx) => { try { this.picking.list = await new Repo(spec.root, spec.on, cx.timer).branches(); } catch (e) { this.picking.error = String(e?.message ?? e); } cx.notify(); });
   }
   pickBranch(name, typed = false) {
     const p = this.picking;
@@ -307,28 +329,32 @@ export default class Git extends View {
   }
 }
 
-function menuRow(id, label, icon, t, onClick, enabled = true) {
+function menuRow(id, label, icon, t, onClick, enabled = true, tooltip = null, detail = null) {
   return h_flex().id(id).h(32).flex_none().px(8).gap(8).items_center().rounded(6).text_color(enabled ? t.foreground : t.dim)
     .when(enabled, (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click(onClick))
-    .child(glyph(icon, 14, enabled ? t.muted : t.dim)).child(div().flex_1().min_w(0).truncate().child(label));
+    .when(Boolean(tooltip), (e) => e.tooltip(tooltip))
+    .child(glyph(icon, 14, enabled ? t.muted : t.dim)).child(div().min_w(0).truncate().when(Boolean(detail), (e) => e.flex_none()).when(!detail, (e) => e.flex_1()).child(label))
+    .when(Boolean(detail), (e) => e.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail)));
 }
 
-// The ⋯ menu and a file's right-click menu. Items: [action, label, icon, enabled?, stash?] or null (a line).
+// Items: [action, label, icon, enabled?, arg?, tooltip?, detail?] or null (a line).
 function renderMenu(m, t) {
   const done = () => closeOverlay(m.overlay);
   return v_flex().id("menu").size_full().p(6).gap(0).bg(t.popover).text_color(t.foreground).text_size(13)
     .children(m.items.map((i, n) => {
       if (!i) return div().h(1).my(4).bg(t.border);
-      const [action, label, icon, enabled = true, stash] = i;
+      const [action, label, icon, enabled = true, arg, tooltip, detail] = i;
+      const stash = arg;
       return menuRow(`m-${n}`, label, icon, t, (_e, cx) => {
         if (action === "diff") openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { diff: { root: m.root, on: m.on, path: m.path } } });
+        else if (action === "force-ask") confirm("Force push this branch?", `${m.branch} → ${m.upstream}\nThis rewrites remote history using --force-with-lease.\nGit refuses if the remote changed since your last fetch.`, m.root, "force-push", null, "Force push");
         else if (action === "copy") cx.write_to_clipboard(m.path);
         else if (action === "discard-ask") confirm(m.untracked ? "Delete this new file?" : "Discard its changes?", `${m.path}\n${m.untracked ? "The file isn't tracked: it is deleted, and git can't bring it back." : "Staged and unstaged changes go back to the last commit. Git can't bring them back."}`, m.root, "discard", m.path, m.untracked ? "Delete" : "Discard");
         else if (action === "stash-menu") { done(); return openOverlay({ mod: "git", kind: "popup", width: 240, height: 12 + 3 * 32, at: "pointer", props: { menu: { kind: "stash", root: m.root, items: [["apply", `Apply ${stash.ref}`, "archive", true, stash], ["pop", `Pop ${stash.ref}`, "archive", true, stash], ["drop-ask", "Drop…", "discard", true, stash]] } } }); }
         else if (action === "drop-ask") confirm(`Drop ${stash.ref}?`, `${stash.subject}\nIts changes are gone for good.`, m.root, "drop", { ref: stash.ref, oid: stash.oid }, "Drop");
-        else ask(m.root, action, stash ? { ref: stash.ref, oid: stash.oid } : null);
+        else ask(m.root, action, m.kind === "remotes" ? arg : stash ? { ref: stash.ref, oid: stash.oid } : null);
         done();
-      }, enabled);
+      }, enabled, tooltip, detail);
     }));
 }
 
