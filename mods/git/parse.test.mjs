@@ -1,5 +1,5 @@
 // node mods/git/parse.test.mjs : against a real repository built in a temporary folder.
-import { parseStatus, fileState, parseNumstat, parseDiff, patchOf, hunkRows, parseLog, LOG_FORMAT, lane, treeRows, folderCheck, syncAction } from "./parse.js";
+import { parseStatus, fileState, parseNumstat, parseDiff, patchOf, hunkRows, parseLog, LOG_FORMAT, lane, treeRows, folderCheck, syncAction, gist } from "./parse.js";
 import assert from "assert";
 import { execFileSync } from "child_process";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
@@ -86,4 +86,6 @@ assert.equal(syncAction({ head: "x", upstream: null }).action, "publish");
 assert.deepEqual(syncAction({ head: "x", upstream: "o/x", ahead: 2, behind: 1 }), { action: "pull", label: "Pull ↓1" }, "behind first");
 assert.equal(syncAction({ head: "x", upstream: "o/x", ahead: 3, behind: 0 }).label, "Push ↑3");
 assert.equal(syncAction({ head: "x", upstream: "o/x", ahead: 0, behind: 0 }).action, "fetch");
+assert.equal(gist("To /tmp/o.git\n ! [rejected]        main -> main (stale info)\nerror: failed to push some refs to '/tmp/o.git'"), "! [rejected]        main -> main (stale info)");
+assert.equal(gist("hook says no"), "hook says no"); assert.equal(gist(""), ""); assert.equal(gist("\n  \nfatal: bad\n"), "fatal: bad");
 console.log("parse ok");

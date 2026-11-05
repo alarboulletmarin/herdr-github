@@ -7,29 +7,16 @@ const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.a
 // File names are names, not patterns: "[a].txt" must not also mean "a.txt".
 const LITERAL = ["--literal-pathspecs"];
 
-// Race without cancelling exec: a late answer is consumed but cannot settle twice.
-export function commandAnswer(work, timer, command, ms = 30000) {
-  if (!timer) return work();
-  return new Promise((resolve, reject) => {
-    const alarm = timer.after(ms, () => reject(new Error(`git ${command}: no answer after ${ms / 1000} s. Herdr's command runner may be stuck: restart the window.`)));
-    Promise.resolve().then(work).then(resolve, reject).finally(() => alarm.cancel());
-  });
-}
-
-// How long a command may take before the panel lets go. Hooks run on commit, push, pull, switch…:
-// a pre-commit that runs the tests must not read as a failure while it still commits. Reads stay short.
-const HOOKED = new Set(["commit", "push", "pull", "merge", "rebase", "switch", "checkout", "stash", "am", "cherry-pick", "revert"]);
-export const patience = (args) => { const verb = args.find((a) => !a.startsWith("-") && !a.includes("=")); return HOOKED.has(verb) ? 600000 : verb === "fetch" ? 90000 : 30000; };
-
 // One repository: its top folder and the machine it lives on (null: this one).
 export class Repo {
-  constructor(root, on, timer = null) { this.root = root; this.on = on; this.timer = timer; }
-  static async at(cwd, on, timer = null) {
-    const r = await commandAnswer(() => exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }), timer, "rev-parse");
-    return r.code === 0 ? new Repo(r.stdout.trim(), on, timer) : null;
+  constructor(root, on) { this.root = root; this.on = on; }
+  static async at(cwd, on) {
+    const r = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
+    return r.code === 0 ? new Repo(r.stdout.trim(), on) : null;
   }
   async run(args, read = false) {
-    const r = await commandAnswer(() => exec("git", [...LITERAL, ...(read ? READ : []), ...args], { cwd: this.root, on: this.on }), this.timer, args[0], patience(args));
+    // herdr stops a command after 30 s and rejects with that reason, so the panel never waits longer.
+    const r = await exec("git", [...LITERAL, ...(read ? READ : []), ...args], { cwd: this.root, on: this.on });
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `git ${args[0]} failed`);
     return r.stdout;
   }
@@ -72,7 +59,7 @@ export class Repo {
   }
   async applyHunk(header, hunk, { reverse = false, cached = true } = {}) {
     const args = ["apply", ...(cached ? ["--cached"] : []), ...(reverse ? ["-R"] : []), "-"].join(" ");
-    const r = await commandAnswer(() => exec("sh", ["-c", `printf "%s" "$1" | git ${args}`, "sh", patchOf(header, hunk)], { cwd: this.root, on: this.on }), this.timer, "apply");
+    const r = await exec("sh", ["-c", `printf "%s" "$1" | git ${args}`, "sh", patchOf(header, hunk)], { cwd: this.root, on: this.on });
     if (r.code !== 0) throw new Error(r.stderr.trim() || "git apply failed");
   }
   // Throws away a file's changes: tracked ones back to HEAD (index and tree), untracked ones deleted.

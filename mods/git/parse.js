@@ -118,3 +118,5 @@ export function syncAction(b) {
   if (b.ahead > 0) return { action: "push", label: `Push ↑${b.ahead}` };
   return { action: "fetch", label: "Fetch" };
 }
+// The line of a git error worth a toast: push prints "To <url>" first and the reason after.
+export const gist = (text) => { const lines = String(text).split("\n").map((l) => l.trim()).filter(Boolean); return lines.find((l) => /^(error|fatal|!)/.test(l)) ?? lines[0] ?? ""; };

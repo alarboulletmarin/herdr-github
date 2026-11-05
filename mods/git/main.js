@@ -2,7 +2,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, theme, props, shared, setShared, openOverlay, closeOverlay, notify, watchFolder, nextCommand } from "herdr";
 import { Repo } from "./git.js";
-import { fileState, treeRows, folderCheck, syncAction } from "./parse.js";
+import { fileState, treeRows, folderCheck, syncAction, gist } from "./parse.js";
 import { glyph, spinner, button, checkbox, letterColor, under, ask, confirm, MONO } from "./ui.js";
 import { Diff } from "./diff.js";
 import { History } from "./history.js";
@@ -59,7 +59,7 @@ export default class Git extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        const repo = this.repo?.root ? this.repo : await Repo.at(cwd, on, cx.timer);
+        const repo = this.repo?.root ? this.repo : await Repo.at(cwd, on);
         if (where() !== context) return;
         if (repo?.root !== this.repo?.root) this.switchMessage(repo?.root ?? null, repo?.on);
         this.repo = repo;
@@ -97,7 +97,7 @@ export default class Git extends View {
     this.busy = label; this.error = null; cx.notify();
     cx.spawn(async (cx) => {
       try { const out = await work(this.repo); after?.(out); }
-      catch (e) { this.error = String(e?.message ?? e); notify({ title: `${label.replace(/…$/, "")} failed`, body: this.error, level: "error" }); }
+      catch (e) { this.error = String(e?.message ?? e); notify({ title: `${label.replace(/…$/, "")} failed`, body: gist(this.error), level: "error" }); }
       finally { this.busy = null; this.loading = false; this.refresh(cx); cx.notify(); }
     });
   }
@@ -142,6 +142,20 @@ export default class Git extends View {
       if (!action.startsWith("fetch")) notify({ title: action.startsWith("pull") ? "Pulled" : action === "publish" ? "Published" : "Pushed", body: b.head ?? "", level: "success", timeout: 2500 });
     });
   }
+  // A request from a popup or dialog (shared "git.do"), seen in render. Two copies on one repository (the
+  // side panel and a pane) both see it: the first to claim it runs it. A spawned body runs at once, inside
+  // this render, up to its first await: yield first, or act's notify throws mid-render with busy already
+  // set ("Fetching…" for ever). Check and claim stay one synchronous step after that, so only one copy runs it.
+  // ponytail: relies on mod copies sharing one script thread; separate runtimes would need an ack from the doer.
+  claim(asked, cx) {
+    if (asked.root !== this.repo?.root) return;
+    cx.spawn(async (cx) => {
+      await cx.sleep(0);
+      if (shared("git.claimed") === asked.id) return;
+      setShared("git.claimed", asked.id);
+      this.perform(asked, cx);
+    });
+  }
   // What popups and dialogs asked for (shared "git.do"), once, for this repository only.
   perform({ action, arg }, cx) {
     const file = (path) => this.st?.files.find((f) => f.path === path);
@@ -171,7 +185,7 @@ export default class Git extends View {
     this.act(`Switching to ${name}…`, cx, async (r) => {
       try {
         await r.switchBranch(name, options);
-        if (options.stash) notify({ title: `Switched to ${name}`, body: "Changes remain in the stash; apply them manually when ready.", level: "success" });
+        if (options.stash) notify({ title: `Switched to ${name}`, body: "Your changes are in the stash.", level: "success" });
       } catch (e) {
         // Offer recovery only for Git's local-change refusal, not invalid refs or worktree locks.
         if (!options.merge && !options.stash && /would be overwritten|local changes|commit your changes or stash/i.test(String(e?.message ?? e))) {
@@ -253,17 +267,7 @@ export default class Git extends View {
 
     if (where() !== this.context) this.refresh(cx);
     const asked = shared("git.do");
-    if (asked?.id && asked.id !== this.doneId) {
-      this.doneId = asked.id;
-      // Two copies on one repository (the side panel and a pane) both see the request: the first to claim
-      // it runs it. Check and claim happen before any await, out of render (no notify or setShared there).
-      // ponytail: relies on mod copies sharing one script thread; separate runtimes would need an ack from the doer.
-      if (asked.root === this.repo?.root) cx.spawn(async (cx) => {
-        if (shared("git.claimed") === asked.id) return;
-        setShared("git.claimed", asked.id);
-        this.perform(asked, cx);
-      });
-    }
+    if (asked?.id && asked.id !== this.doneId) { this.doneId = asked.id; this.claim(asked, cx); }
 
     const shell = v_flex().id("git").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13);
     if (!this.repo) return shell.child(this.title(t, null)).child(div().p(14).text_color(t.dim).child(this.error ?? (this.repo === null ? "Not a git repository. Focus a terminal inside one." : "Looking for a repository…")));
@@ -336,7 +340,7 @@ export default class Git extends View {
     this.filter.on("change", (_e, cx) => { this.picking.q = this.filter.value().trim(); this.picking.selected = 0; this.branchScroll.scroll_to_item(0); cx.notify(); });
     this.filter.on("submit", () => this.chooseBranch());
     this.filter.focus();
-    cx.spawn(async (cx) => { try { this.picking.list = await new Repo(spec.root, spec.on, cx.timer).branches(); } catch (e) { this.picking.error = String(e?.message ?? e); } cx.notify(); });
+    cx.spawn(async (cx) => { try { this.picking.list = await new Repo(spec.root, spec.on).branches(); } catch (e) { this.picking.error = String(e?.message ?? e); } cx.notify(); });
   }
   branchItems() {
     const p = this.picking, list = (p.list ?? []).filter((b) => b.name.toLowerCase().includes(p.q.toLowerCase()));
@@ -372,19 +376,21 @@ export default class Git extends View {
   renderBranches(t) {
     const p = this.picking, items = this.branchItems(), choices = items.filter((b) => !b.section), selected = choices[p.selected];
     const height = Math.min(330, items.reduce((h, b) => h + (b.section ? 24 : 32), 0));
+    const key = (b) => `${b.section ? "section" : b.create ? "create" : b.remote ? "remote" : "local"}-${b.name}`;
     return v_flex().id("branches").w_full().p(6).gap(4).bg(t.popover).text_color(t.foreground).text_size(13)
       .track_focus(this.branchFocus).on_key_down((e, cx) => this.branchKey(e, cx))
       .child(div().h(30).flex_none().px(8).flex().items_center().rounded(6).border_1().border_color(t.border).child(Input.new(this.filter).w_full().text_size(12.5)))
       .when(!p.list || !items.length, (e) => e.child(div().px(8).py(6).text_color(p.error ? t.ansi1 : t.muted).child(p.error ?? (p.list ? "No matching branches" : "Reading branches…"))))
-      .when(items.length > 0, (e) => e.child(v_virtual_list("branch-list", items.length, items.map((b) => b.section ? 24 : 32), (i) => `${items[i].section ? "section" : items[i].remote ? "remote" : "local"}-${items[i].name}`, (range) => items.slice(range.start, range.end).map((b) => {
+      .when(items.length > 0, (e) => e.child(v_virtual_list("branch-list", items.length, items.map((b) => b.section ? 24 : 32), (i) => key(items[i]), (range) => items.slice(range.start, range.end).map((b) => {
         if (b.section) return div().h(24).flex_none().px(8).pt(4).text_size(11).text_color(t.dim).child("Remote");
-        return h_flex().id(`b-${b.remote ? "remote-" : ""}${b.name}`).h(32).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().text_color(b.remote ? t.muted : t.foreground)
+        // Rows take no handlers inside a virtual list: the list's on_item_click picks by key.
+        return h_flex().h(32).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().text_color(b.remote ? t.muted : t.foreground)
           .when(b === selected, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-          .on_click(() => this.pickBranch(b.name, b.create))
           .child(div().w(14).flex_none().when(b.create || (!b.remote && b.name === p.head), (e) => e.child(glyph(b.create ? "plus" : "check", 14, t.foreground))))
           .child(div().flex_1().min_w(0).truncate().child(b.create ? `Create branch “${b.name}”` : b.remote ? `origin/${b.name}` : b.name))
           .child(div().flex_none().text_size(11).text_color(t.dim).child(b.when ?? ""));
-      })).h(height).w_full().track_scroll(this.branchScroll)));
+      })).h(height).w_full().track_scroll(this.branchScroll)
+        .on_item_click((k) => { const b = items.find((b) => !b.section && key(b) === k); if (b) this.pickBranch(b.name, b.create); })));
   }
 }
 

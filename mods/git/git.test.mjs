@@ -9,13 +9,12 @@ import { join } from "path";
 // "herdr" resolves to a module whose exec runs the program here.
 const stub = `
 export const spaces = () => [{ active: true, folder: "never-answers" }], panes = () => [], focused = () => null;
-export const theme = () => ({}), props = () => ({}), shared = () => null, watchFolder = () => new Promise(() => {}), nextCommand = watchFolder;
-export const setShared = (key, value) => { globalThis.gitAsked = value; }, openOverlay = (spec) => { globalThis.gitOverlay = spec; }, closeOverlay = () => {}, readTextFile = () => null;
+export const theme = () => ({}), props = () => ({}), shared = (key) => globalThis.gitShared?.[key] ?? null, watchFolder = () => new Promise(() => {}), nextCommand = watchFolder;
+export const setShared = (key, value) => { globalThis.gitAsked = value; (globalThis.gitShared ??= {})[key] = value; }, openOverlay = (spec) => { globalThis.gitOverlay = spec; }, closeOverlay = () => {}, readTextFile = () => null;
 export const notify = (notice) => { globalThis.gitNotice = notice; };
 import { execFile } from "child_process";
 export function exec(cmd, args = [], { cwd } = {}) {
   if (cwd === "never-answers") return new Promise(() => {});
-  if (cwd === "late-answer") return new Promise((resolve) => { globalThis.gitLateAnswer = resolve; });
   return new Promise((ok) => execFile(cmd, args, { cwd, maxBuffer: 1 << 26 }, (e, stdout, stderr) => ok({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, stdout, stderr })));
 }`;
 const gpui = "export class View {} export const div = () => {}, svg = () => {};";
@@ -24,7 +23,7 @@ registerHooks({ resolve: (spec, ctx, next) => {
   const source = { herdr: stub, "gpui-kit": gpui, "gpui-base": base }[spec];
   return source ? { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true } : next(spec, ctx);
 } });
-const { Repo, commandAnswer, patience } = await import("./git.js");
+const { Repo } = await import("./git.js");
 const { default: Git } = await import("./main.js");
 
 const made = [];
@@ -39,50 +38,23 @@ function repo(files = {}, commit = true) {
 const staged = (sh) => sh("diff", "--cached", "--name-only").split("\n").filter(Boolean).sort();
 
 try {
-  { // A stuck runner rejects, releases its caller, and ignores a late answer.
-    const alarms = [], timer = { after(ms, fire) { const alarm = { ms, fire, cancelled: false }; alarms.push(alarm); return { cancel() { alarm.cancelled = true; } }; } };
-    const r = new Repo("never-answers", null, timer);
-    // Hooks (pre-commit, pre-push…) may run the tests: those commands get minutes, not seconds.
-    assert.equal(patience(["-c", "checkout.defaultRemote=origin", "switch", "--merge", "--", "x"]), 600000);
-    assert.equal(patience(["--no-literal-pathspecs", "stash", "push"]), 600000);
-    assert.equal(patience(["fetch", "--prune"]), 90000); assert.equal(patience(["log", "-1"]), 30000);
-    for (const [command, ms] of [["fetch", 90000], ["pull", 600000], ["push", 600000], ["commit", 600000], ["status", 30000]]) {
-      let busy = true;
-      const result = r.run([command]).finally(() => { busy = false; });
-      const rejected = assert.rejects(result, new RegExp(`git ${command}: no answer after ${ms / 1000} s.*restart the window`));
-      assert.equal(alarms.at(-1).ms, ms); alarms.at(-1).fire(); await rejected; assert.equal(busy, false);
-    }
-    let applied = false;
-    const late = new Repo("late-answer", null, timer).run(["fetch"]).then(() => { applied = true; });
-    const rejected = assert.rejects(late, /no answer after 90 s/);
-    await Promise.resolve(); alarms.at(-1).fire(); await rejected;
-    globalThis.gitLateAnswer({ code: 0, stdout: "late", stderr: "" });
-    await new Promise((resolve) => setImmediate(resolve)); assert.equal(applied, false);
-    const ok = commandAnswer(() => Promise.resolve("ok"), timer, "status");
-    assert.equal(await ok, "ok"); await Promise.resolve(); assert.equal(alarms.at(-1).cancelled, true);
-    await assert.rejects(commandAnswer(() => { throw new Error("cannot start"); }, timer, "status"), /cannot start/);
-  }
-  { // The panel releases busy, refreshes again, and cannot apply an expired command's callback.
-    const alarms = [], tasks = [], timer = { after(ms, fire) { const alarm = { ms, fire }; alarms.push(alarm); return { cancel() {} }; } };
-    const cx = { timer, notify() {}, spawn(work) { tasks.push(work(cx)); } };
-    const panel = new Git(); panel.repo = new Repo("late-answer", null, timer);
-    let refreshed = 0, applied = false; panel.refresh = () => { refreshed++; };
-    panel.act("Fetching…", cx, (r) => r.run(["fetch"]), () => { applied = true; });
-    await Promise.resolve(); const firstAnswer = globalThis.gitLateAnswer;
-    assert.equal(panel.busy, "Fetching…"); assert.equal(alarms.at(-1).ms, 90000);
-    alarms.at(-1).fire(); await tasks.at(-1);
-    assert.equal(panel.busy, null); assert.equal(refreshed, 1); assert.match(panel.error, /git fetch: no answer after 90 s/);
-    assert.equal(globalThis.gitNotice.level, "error");
-    panel.act("Staging…", cx, (r) => r.run(["add", "a"])); await Promise.resolve();
-    const secondAnswer = globalThis.gitLateAnswer;
-    firstAnswer({ code: 0, stdout: "late", stderr: "" }); await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(applied, false); assert.equal(panel.busy, "Staging…");
-    secondAnswer({ code: 0, stdout: "", stderr: "" }); await tasks.at(-1);
-    assert.equal(panel.busy, null); assert.equal(refreshed, 2);
-    // A refresh on the same stuck runner also leaves loading, ready for the next timer tick.
-    delete panel.refresh; panel.repo = new Repo("never-answers", null, timer);
-    panel.refresh(cx); assert.equal(panel.loading, true); assert.equal(alarms.at(-1).ms, 30000);
-    alarms.at(-1).fire(); await tasks.at(-1); assert.equal(panel.loading, false);
+  { // A git.do seen in render (here, Fetch from the ⋯ menu): GPUI runs a spawned body at once, inside the render,
+    // where notify throws. The claim must yield first, or busy stays "Fetching…" for ever.
+    let rendering = false, synced = 0; const tasks = [];
+    const cx = { sleep: () => Promise.resolve(), notify() { if (rendering) throw new Error("notify during render"); },
+      spawn(body) { const p = Promise.resolve().then(() => 0) && body(cx); tasks.push(p); return p; } };
+    const panel = new Git(); panel.refresh = () => {};
+    panel.repo = { root: "/r", on: null, sync: async () => { synced++; } };
+    panel.st = { branch: { head: "main", upstream: "origin/main" }, remotes: [{ name: "origin" }], files: [] };
+    const asked = { id: "qa-1", root: "/r", action: "fetch", arg: null };
+    rendering = true; panel.claim(asked, cx); rendering = false;
+    for (let i = 0; i < 4; i++) await Promise.all(tasks);
+    assert.equal(synced, 1, "the fetch ran"); assert.equal(panel.busy, null, "and let go of busy");
+    assert.equal(globalThis.gitShared["git.claimed"], "qa-1");
+    rendering = true; panel.claim(asked, cx); rendering = false; for (let i = 0; i < 4; i++) await Promise.all(tasks);
+    assert.equal(synced, 1, "a claimed request doesn't run twice");
+    panel.claim({ ...asked, id: "qa-2", root: "/elsewhere" }, cx); await Promise.all(tasks);
+    assert.equal(synced, 1, "another repository's request is not ours");
   }
   { // Menu availability and popup dimensions follow the repository state without new exec calls.
     const panel = new Git(); panel.repo = new Repo("unused", "machine");
