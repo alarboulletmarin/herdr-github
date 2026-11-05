@@ -85,8 +85,9 @@ export class Repo {
     if (!oid || now !== oid) throw new Error(`${ref} changed since you picked it: open the menu again`);
     return ref;
   }
-  async log({ all = false, limit = 400 } = {}) {
-    return parseLog(await this.read(["log", "--graph", "--date-order", ...(all ? ["--all"] : []), "-n", String(limit), `--format=${LOG_FORMAT}`]));
+  // range: a revision range such as "origin/HEAD..HEAD" (ignored with all).
+  async log({ all = false, range = null, limit = 400 } = {}) {
+    return parseLog(await this.read(["log", "--graph", "--date-order", "-n", String(limit), `--format=${LOG_FORMAT}`, ...(all ? ["--all"] : range ? [range, "--"] : [])]));
   }
   async show(hash) {
     const [info, patch] = await Promise.all([

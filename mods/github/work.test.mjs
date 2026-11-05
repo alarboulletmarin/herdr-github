@@ -70,7 +70,7 @@ assert.equal(agentOf({ folder: "/x", space: "local" }, [{ space: "vps", cwd: "/x
 // Changes follows the finished agent's worktree, including a cwd below its root.
 for (const status of ["done", "idle"]) {
   const s = stageOf(open, wt, [{ ...there, status }]);
-  assert.deepEqual(changesOf(wt, s), { root: wt.folder, on: null });
+  assert.deepEqual(changesOf(wt, s), { root: wt.folder, on: null, range: "origin/HEAD..HEAD" });
 }
 for (const status of ["working", "blocked"]) assert.equal(changesOf(wt, stageOf(open, wt, [{ ...there, status }])), null);
 assert.equal(changesOf(null, stageOf(open)), null);

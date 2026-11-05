@@ -176,5 +176,26 @@ try {
     assert.ok(existsSync(join(dir, "old.txt")));
     assert.equal(sh("status", "--porcelain"), "", "nothing left: the rename is undone too");
   }
+  { // Changes on an agent's worktree: only what it added since origin/HEAD, not the history below it.
+    const { dir: up, sh: upSh, write: upWrite } = repo({ "a": "1\n" });
+    upWrite("a", "2\n"); upSh("commit", "-qam", "base two");
+    const clone = mkdtempSync(join(tmpdir(), "herdr-git-")); made.push(clone);
+    execFileSync("git", ["clone", "-q", up, clone]);
+    const wt = join(clone, "..", `${clone.split("/").pop()}-wt`); made.push(wt);
+    const sh = (...a) => execFileSync("git", a, { cwd: wt, encoding: "utf8" });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feat/7-x", wt, "origin/HEAD"], { cwd: clone });
+    sh("config", "user.email", "t@t"); sh("config", "user.name", "t");
+    for (const n of ["agent one", "agent two"]) { writeFileSync(join(wt, "a"), n); sh("commit", "-qam", n); }
+    const r = new Repo(wt, null), subjects = (ls) => ls.filter((l) => l.commit).map((l) => l.commit.subject);
+    assert.deepEqual(subjects(await r.log({ range: "origin/HEAD..HEAD" })), ["agent two", "agent one"]);
+    assert.deepEqual(subjects(await r.log()), ["agent two", "agent one", "base two", "one"], "no range: the whole branch");
+    assert.equal(subjects(await r.log({ all: true, range: "origin/HEAD..HEAD" })).length, 4, "all ignores the range");
+    upSh("commit", "--allow-empty", "-qm", "upstream later"); execFileSync("git", ["fetch", "-q"], { cwd: clone });
+    assert.deepEqual(subjects(await r.log({ range: "origin/HEAD..HEAD" })), ["agent two", "agent one"], "base moved on: still only the agent's");
+    const { r: bare } = repo({ "a": "1\n" }); // no remote: the range fails, History falls back to the whole branch
+    await assert.rejects(bare.log({ range: "origin/HEAD..HEAD" }));
+    const { r: empty } = repo({}, false);
+    await assert.rejects(empty.log({ range: "origin/HEAD..HEAD" }));
+  }
 } finally { for (const d of made) rmSync(d, { recursive: true, force: true }); }
 console.log("git ok");

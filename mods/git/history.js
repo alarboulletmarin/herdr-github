@@ -6,18 +6,23 @@ import { lane } from "./parse.js";
 import { glyph, spinner, button, MONO } from "./ui.js";
 
 // The commit graph: `git log --graph` drawn in lanes, each lane in its own color. Pick a commit to
-// read it on the right: message, author, files and patch. { root, on }.
+// read it on the right: message, author, files and patch. { root, on, range? }: with a range
+// ("origin/HEAD..HEAD"), only the commits it holds until "Whole branch" is picked.
 export class History {
-  constructor({ root, on }, overlay, cx) {
-    this.repo = new Repo(root, on); this.overlay = overlay; this.all = false; this.lines = null; this.picked = null; this.patch = [];
+  constructor({ root, on, range = null }, overlay, cx) {
+    this.repo = new Repo(root, on); this.overlay = overlay; this.all = false; this.range = range; this.scoped = Boolean(range); this.lines = null; this.picked = null; this.patch = [];
     this.load(cx);
   }
   load(cx) {
     this.loading = true; cx.notify();
     cx.spawn(async (cx) => {
-      const gen = (this.gen = (this.gen ?? 0) + 1), all = this.all;
-      try { const lines = await this.repo.log({ all }); if (gen !== this.gen) return; this.lines = lines; this.error = null; if (!this.picked) { const first = this.lines.find((l) => l.commit); if (first) this.pick(first.commit.hash, cx); } }
-      catch (e) { this.error = String(e?.message ?? e); this.lines ??= []; }
+      const gen = (this.gen = (this.gen ?? 0) + 1), all = this.all, range = this.scoped ? this.range : null;
+      try { const lines = await this.repo.log({ all, range }); if (gen !== this.gen) return; this.lines = lines; this.error = null; if (!this.picked) { const first = this.lines.find((l) => l.commit); if (first) this.pick(first.commit.hash, cx); } }
+      catch (e) {
+        // The base is unknown here (no origin/HEAD): fall back to the whole branch rather than nothing.
+        if (range && !all && gen === this.gen) { this.scoped = false; this.note = `${this.range.split("..")[0]} not found: whole branch`; return this.load(cx); }
+        this.error = String(e?.message ?? e); this.lines ??= [];
+      }
       finally { if (gen === this.gen) { this.loading = false; cx.notify(); } }
     });
   }
@@ -62,8 +67,9 @@ export class History {
     return v_flex().id("history").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h_flex().flex_none().h(48).px(16).gap(8).items_center().border_b(1).border_color(t.border)
         .child(glyph("history", 15, t.muted)).child(div().font_semibold().child("History")).child(div().text_size(12).text_color(t.muted).child(this.repo.root))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.ansi1).child(this.error ?? ""))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.ansi1).child(this.error ?? this.note ?? ""))
         .when(this.loading, (e) => e.child(spinner(13, t.muted)))
+        .when(Boolean(this.range) && !this.all, (e) => e.child(button("scope", this.scoped ? `Since ${this.range.split("..")[0]}` : "Whole branch", t, (_e, cx) => { this.scoped = !this.scoped; this.note = null; this.picked = null; this.load(cx); }, { small: true, icon: "history", tooltip: "Only the commits added since the base, or the whole branch" })))
         .child(button("all", this.all ? "All branches" : "This branch", t, (_e, cx) => { this.all = !this.all; this.load(cx); }, { small: true, icon: "branch", tooltip: "Show every branch, or the checked-out one" }))
         .child(button("close", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" })))
       .child(h_flex().flex_1().min_h(0)
@@ -71,7 +77,7 @@ export class History {
           .child(v_virtual_list("log", lines.length, 24, (i) => String(i), (range) => lines.slice(range.start, range.end).map((l, n) => this.row(l, range.start + n, colors, t)))
             .size_full().on_item_click((key, cx) => this.pick(lines[+key]?.commit?.hash, cx)))
           .child(Scrollbar.vertical("log").viewport_from_layout().absolute().inset_0())
-          .when(!lines.length && !this.loading, (e) => e.child(div().absolute().top(12).left(12).text_color(t.dim).child("No commits yet"))))
+          .when(!lines.length && !this.loading, (e) => e.child(div().absolute().top(12).left(12).text_color(t.dim).child(this.scoped && !this.all ? `No commits since ${this.range.split("..")[0]}` : "No commits yet"))))
         .child(v_flex().w_2_5().flex_none().h_full().min_h(0).border_l(1).border_color(t.border)
           .child(v_flex().flex_none().p(14).gap(6).border_b(1).border_color(t.border)
             .child(div().text_size(14).font_semibold().child(c ? c.message.split("\n")[0] : this.picked ? "Loading…" : "Pick a commit"))

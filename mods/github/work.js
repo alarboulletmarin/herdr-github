@@ -23,7 +23,7 @@ export function stageOf(item, mark, agents = [], kind = item.headRefName !== und
 }
 
 // Worktrees prepared by launch() live on this machine; the git mod uses null for local execution.
-export const changesOf = (mark, s) => mark?.folder && s.stage === "review" && s.why === "Agent finished" ? { root: mark.folder, on: null } : null;
+export const changesOf = (mark, s) => mark?.folder && s.stage === "review" && s.why === "Agent finished" ? { root: mark.folder, on: null, range: "origin/HEAD..HEAD" } : null;
 
 // A new marks object (shared values are replaced whole). stage null removes the mark.
 export function marked(marks, key, stage, extra = {}) {
