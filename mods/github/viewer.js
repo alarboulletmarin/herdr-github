@@ -311,12 +311,13 @@ export class Viewer {
     const changes = changesOf(mark, s), cleanup = cleanupOf(mark, s, agents);
     const status = v_flex().gap(8)
       .child(segmented("stage", STAGES.filter(([k]) => k !== "done"), mark?.by === "hand" ? mark.stage : null, t, (k, _cx) => setWork(this.key(), k)))
-      .child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
-        .child(div().flex_1().min_w(0).truncate().child(`${STAGES.find(([k]) => k === s.stage)[1]}${s.why ? ` · ${s.why}` : ""}`))
+      .child(div().text_size(12).text_color(t.muted).child(`${STAGES.find(([k]) => k === s.stage)[1]}${s.why ? ` · ${s.why}` : ""}`))
+      // Its own line: beside the status, three or four links cut the status short.
+      .when(Boolean(s.agent || changes || cleanup || mark), (e) => e.child(h_flex().gap(10).flex_wrap().items_center().text_size(12)
         .when(Boolean(s.agent), (e) => e.child(link("stage-join", "Join", () => joinAgent(s.agent))))
         .when(Boolean(changes), (e) => e.child(link("stage-changes", "Changes", () => showChanges(changes))))
         .when(cleanup, (e) => e.child(link("stage-cleanup", "Clean up", () => cleanUp(this.key(), mark))))
-        .when(Boolean(mark), (e) => e.child(link("stage-auto", mark.by === "hand" ? "Auto" : "Clear", () => setWork(this.key(), null)))));
+        .when(Boolean(mark), (e) => e.child(link("stage-auto", mark.by === "hand" ? "Auto" : "Clear", () => setWork(this.key(), null))))));
     return v_flex().id("aside").w(268).flex_none().min_h(0).overflow_y_scrollbar().pl(8).pr(24).pt(6)
       .child(part("Status", status))
       .when(pr, (e) => e.child(part("Reviewers", reviewers.size ? v_flex().gap(8).children([...reviewers].map(([login, state]) => person(login).child(verdictIcon(state)))) : quiet("No reviews"))))
