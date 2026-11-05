@@ -12,8 +12,8 @@ export const letterColor = (letter, t) => ({ A: t.ansi2, D: t.ansi1, U: t.ansi1,
 
 // Where the last button was pressed (window px): a menu it opens hangs under it.
 let pressed = null;
-export function under(width, gap = 4) {
-  return pressed ? { x: Math.max(4, pressed.x + pressed.width - width), y: pressed.y + pressed.height + gap } : "pointer";
+export function under(width, gap = 4, bounds = pressed) {
+  return bounds ? { x: Math.max(4, bounds.x + bounds.width - width), y: bounds.y + bounds.height + gap } : "pointer";
 }
 
 export function button(id, label, t, onClick, { primary = false, invisible = false, enabled = true, icon: name = null, small = false, tooltip = null } = {}) {
@@ -41,6 +41,6 @@ export function checkbox(id, state, t, onClick) {
 // Popups and dialogs ask the panel to act through shared("git.do"), so the work outlives them.
 export function ask(root, action, arg = null) { setShared("git.do", { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, at: Date.now(), root, action, arg }); }
 // Asks before throwing work away; the panel does it on a click of `yes`.
-export function confirm(title, detail, root, action, arg, yes) {
-  openOverlay({ mod: "git", kind: "dialog", modal: true, width: 420, height: 190, props: { confirm: { title, detail, root, action, arg, yes } } });
+export function confirm(title, detail, root, action, arg, yes, alternative = null) {
+  openOverlay({ mod: "git", kind: "dialog", modal: true, width: 420, height: alternative ? 230 : 190, props: { confirm: { title, detail, root, action, arg, yes, alternative } } });
 }

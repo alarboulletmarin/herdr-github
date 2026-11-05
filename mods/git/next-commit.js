@@ -7,8 +7,8 @@ import { glyph, spinner, button, ask, MONO } from "./ui.js";
 
 // Read-only: the message belongs to this preview; the panel runs its commit after the dialog closes.
 export class NextCommit {
-  constructor({ root, on, message, amend }, overlay, cx) {
-    this.repo = new Repo(root, on); this.overlay = overlay; this.message = message; this.amend = amend;
+  constructor({ root, on, message, amend, signoff = false, noVerify = false }, overlay, cx) {
+    this.repo = new Repo(root, on); this.overlay = overlay; this.message = message; this.amend = amend; this.signoff = signoff; this.noVerify = noVerify;
     this.files = []; this.rows = []; this.path = null; this.width = 600;
     this.load(cx);
   }
@@ -34,7 +34,7 @@ export class NextCommit {
     this.rows = rows; this.width = rows.reduce((w, r) => Math.max(w, r.text.length * 7 + 120), 600);
   }
   commit() {
-    ask(this.repo.root, "commit", { message: this.message, amend: this.amend });
+    ask(this.repo.root, "commit", { message: this.message, amend: this.amend, signoff: this.signoff, noVerify: this.noVerify });
     closeOverlay(this.overlay);
   }
   line(r, t) {
@@ -60,7 +60,7 @@ export class NextCommit {
         .child(button("next-refresh", "", t, (_e, cx) => { this.load(cx); cx.notify(); }, { icon: "refresh", invisible: true, enabled: !this.loading, tooltip: "Refresh preview" }))
         .child(button("next-submit", this.amend ? "Amend" : "Commit", t, () => this.commit(), { primary: true, icon: "commit", enabled: canCommit }))
         .child(button("next-close", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" })))
-      .child(div().flex_none().px(16).py(8).text_color(t.muted).child(summary))
+      .child(div().flex_none().px(16).py(8).text_color(t.muted).child(`${summary}${this.signoff ? " · Sign off" : ""}${this.noVerify ? " · Skip hooks" : ""}`))
       // As tall as its lines (21 px each, measured), up to 6 of them; longer scrolls (a scroller alone takes its max).
       .child(v_flex().id("next-message").flex_none().h(18 + 21 * Math.min(6, msg.length)).overflow_y_scrollbar().px(16).py(8).gap(2).border_y(1).border_color(t.border).font_family(MONO).text_size(12)
         .children(msg.map((l) => div().flex_none().child(l || " "))))

@@ -73,11 +73,11 @@ export class Repo {
     }));
     return { tracked, files: changes };
   }
-  async commit(message, amend = false) {
+  async commit(message, amend = false, { signoff = false, noVerify = false } = {}) {
     const { files } = await this.status();
     const staged = files.some((f) => !f.untracked && f.x !== ".");
     if (!staged && !amend && !files.some((f) => !f.untracked)) throw new Error("No tracked changes to commit");
-    return this.run(["commit", ...(staged || amend ? [] : ["-a"]), ...(amend ? ["--amend"] : []), ...(message ? ["-m", message] : ["--no-edit"])]);
+    return this.run(["commit", ...(staged || amend ? [] : ["-a"]), ...(amend ? ["--amend"] : []), ...(signoff ? ["--signoff"] : []), ...(noVerify ? ["--no-verify"] : []), ...(message ? ["-m", message] : ["--no-edit"])]);
   }
   // The stash at ref, only if it is still the one the person picked.
   async stashRef(ref, oid) {
@@ -97,8 +97,19 @@ export class Repo {
     const [full, author, email, date, ...body] = info.split("\x1f");
     return { hash: full, author, email, date, message: body.join("\x1f").trim(), patch };
   }
+  async switchBranch(name, { merge = false, stash = false } = {}) {
+    // Stash passes internal pathspecs to clean: literal mode would leave untracked files behind.
+    if (stash) await this.run(["--no-literal-pathspecs", "stash", "push", "--include-untracked", "-m", `Before switching to ${name}`]);
+    // Explicit origin guessing avoids ambiguity when another remote has the same branch.
+    return this.run(["-c", "checkout.defaultRemote=origin", "switch", ...(merge ? ["--merge"] : []), "--", name]);
+  }
   async branches() {
-    const out = await this.read(["for-each-ref", "--sort=-committerdate", "refs/heads", "--format=%(refname:short)%1f%(committerdate:relative)%1f%(upstream:short)"]);
-    return out.split("\n").filter(Boolean).map((l) => { const [name, when, upstream] = l.split("\x1f"); return { name, when, upstream }; });
+    const out = await this.read(["for-each-ref", "--sort=-committerdate", "refs/heads", "refs/remotes/origin", "--format=%(refname)%1f%(committerdate:relative)%1f%(upstream:short)%1f%(symref)"]);
+    const rows = out.split("\n").filter(Boolean).map((l) => {
+      const [ref, when, upstream, symref] = l.split("\x1f"), remote = ref.startsWith("refs/remotes/");
+      return { name: ref.slice(remote ? "refs/remotes/origin/".length : "refs/heads/".length), when, upstream, remote, symref };
+    });
+    const locals = new Set(rows.filter((b) => !b.remote).map((b) => b.name));
+    return rows.filter((b) => !b.symref && (!b.remote || !locals.has(b.name))).map(({ symref, ...b }) => b);
   }
 }

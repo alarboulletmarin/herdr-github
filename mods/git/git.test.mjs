@@ -152,6 +152,67 @@ try {
     const names = (await r.branches()).map((b) => b.name).sort();
     assert.deepEqual(names, ["feature/x", "main"]);
   }
+  { // Signoff uses the committer identity, including when amending without a new message.
+    const { sh, r, write } = repo({ "a": "base\n" });
+    write("a", "signed\n");
+    await r.commit("feat: signed", false, { signoff: true });
+    assert.match(sh("log", "-1", "--format=%B"), /Signed-off-by: t <t@t>/);
+    await r.commit("feat: amended and signed", true, { signoff: true });
+    assert.equal(sh("rev-list", "--count", "HEAD").trim(), "2");
+    assert.match(sh("log", "-1", "--format=%B"), /^feat: amended and signed\n\nSigned-off-by: t <t@t>/);
+    await r.commit("", true, { signoff: true });
+    assert.equal(sh("log", "-1", "--format=%s").trim(), "feat: amended and signed");
+    assert.equal(sh("log", "-1", "--format=%B").match(/Signed-off-by:/g).length, 1);
+  }
+  { // Hook bypass is explicit for each commit; later commits still run the failing hook.
+    const { dir, sh, r, write } = repo({ "a": "base\n" });
+    writeFileSync(join(dir, ".git/hooks/pre-commit"), "#!/bin/sh\necho blocked-by-hook >&2\nexit 1\n", { mode: 0o755 });
+    write("a", "bypass\n");
+    await assert.rejects(r.commit("blocked"), /blocked-by-hook/);
+    await r.commit("feat: bypass hook", false, { noVerify: true, signoff: true });
+    assert.equal(sh("show", "HEAD:a"), "bypass\n");
+    assert.match(sh("log", "-1", "--format=%B"), /Signed-off-by: t <t@t>/);
+    write("a", "blocked again\n");
+    await assert.rejects(r.commit("blocked again"), /blocked-by-hook/);
+  }
+  { // Remote-only origin branches appear once; symbolic HEAD and other remotes are excluded.
+    const { dir: up, sh: upSh } = repo({ "a": "base\n" });
+    upSh("branch", "feature/remote"); upSh("branch", "feature/local");
+    const { sh, r } = repo({ "a": "local\n" });
+    sh("remote", "add", "origin", up); sh("fetch", "-q", "origin");
+    sh("remote", "set-head", "origin", "-a");
+    sh("branch", "--track", "feature/local", "origin/feature/local");
+    sh("update-ref", "refs/remotes/other/ignored", "HEAD");
+    const branches = await r.branches();
+    assert.deepEqual(branches.filter((b) => b.remote).map((b) => b.name), ["feature/remote"]);
+    assert.equal(branches.filter((b) => b.name === "feature/local").length, 1);
+    await r.switchBranch("feature/remote");
+    assert.equal(sh("branch", "--show-current").trim(), "feature/remote");
+    assert.equal(sh("rev-parse", "--abbrev-ref", "@{upstream}").trim(), "origin/feature/remote");
+  }
+  { // A refused switch preserves changes; --merge carries a non-overlapping edit to the target.
+    const base = Array.from({ length: 20 }, (_, n) => `${n}\n`).join("");
+    const { sh, r, write, dir } = repo({ "a": base });
+    sh("switch", "-qc", "target"); write("a", base.replace("0\n", "target\n")); sh("commit", "-qam", "target edit"); sh("switch", "-q", "main");
+    write("a", base.replace("19\n", "local\n"));
+    await assert.rejects(r.switchBranch("target"), /local changes|would be overwritten/i);
+    assert.equal(sh("branch", "--show-current").trim(), "main");
+    assert.match(readFileSync(join(dir, "a"), "utf8"), /local/);
+    await r.switchBranch("target", { merge: true });
+    assert.equal(sh("branch", "--show-current").trim(), "target");
+    assert.match(readFileSync(join(dir, "a"), "utf8"), /^target/);
+    assert.match(readFileSync(join(dir, "a"), "utf8"), /local/);
+    assert.equal((await r.status()).files.some((f) => f.conflict), false);
+  }
+  { // Stash and switch keeps tracked and untracked work in the stash, without applying it.
+    const { sh, r, write } = repo({ "a": "base\n" });
+    sh("branch", "target"); write("a", "work\n"); write("new.txt", "new\n");
+    await r.switchBranch("target", { stash: true });
+    assert.equal(sh("branch", "--show-current").trim(), "target");
+    assert.equal(sh("status", "--porcelain"), "");
+    assert.equal(sh("show", "stash@{0}:a"), "work\n");
+    assert.equal(sh("show", "stash@{0}^3:new.txt"), "new\n");
+  }
   { // A stash moved since it was picked is refused.
     const { sh, r, write } = repo({ "a": "1\n" });
     write("a", "2\n"); sh("stash", "push", "-q", "-m", "first");

@@ -1,5 +1,5 @@
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, TextareaState, Textarea, InputState, Input, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, theme, props, shared, setShared, openOverlay, closeOverlay, notify, watchFolder, nextCommand } from "herdr";
 import { Repo } from "./git.js";
 import { fileState, treeRows, folderCheck, syncAction } from "./parse.js";
@@ -61,7 +61,7 @@ export default class Git extends View {
       try {
         const repo = this.repo?.root ? this.repo : await Repo.at(cwd, on);
         if (where() !== context) return;
-        if (repo?.root !== this.repo?.root) this.switchMessage(repo?.root ?? null);
+        if (repo?.root !== this.repo?.root) this.switchMessage(repo?.root ?? null, repo?.on);
         this.repo = repo;
         if (!repo) { this.st = null; return; }
         const st = await repo.status();
@@ -73,10 +73,11 @@ export default class Git extends View {
     });
   }
   // Each repository keeps its own half-written message; Amend never carries over to another one.
-  switchMessage(root) {
+  switchMessage(root, on) {
     (this.messages ??= {});
     if (this.msgRoot) this.messages[this.msgRoot] = this.box.value();
-    this.msgRoot = root; this.amend = false;
+    this.msgRoot = root; this.amend = false; this.noVerify = false;
+    this.signoff = root ? remembered(`signoff:${JSON.stringify([on ?? null, root])}`, false) : false;
     const text = (root && this.messages[root]) || "";
     this.box.set_value(text); this.typed = Boolean(text.trim());
   }
@@ -104,12 +105,12 @@ export default class Git extends View {
   toggle(paths, check, cx) { this.act(check === "off" ? "Staging…" : "Unstaging…", cx, (r) => check === "off" ? r.stage(paths) : r.unstage(paths, this.hasHead(), this.st?.files ?? [])); }
 
   staged() { return (this.st?.files ?? []).filter((f) => fileState(f).check !== "off"); }
-  commit(cx, { message = this.box.value(), amend = this.amend } = {}) {
+  commit(cx, { message = this.box.value(), amend = this.amend, signoff = this.signoff, noVerify = this.noVerify } = {}) {
     message = message.trim();
     if (!message && !amend) return;
-    this.act(amend ? "Amending…" : "Committing…", cx, (r) => r.commit(message, amend), () => {
+    this.act(amend ? "Amending…" : "Committing…", cx, (r) => r.commit(message, amend, { signoff, noVerify }), () => {
       if (this.box.value().trim() === message) { this.box.set_value(""); this.typed = false; }
-      this.amend = false;
+      this.amend = false; this.noVerify = false;
     });
   }
   // Amend starts from the last commit's message, as Zed does; unticking leaves the box alone.
@@ -143,7 +144,9 @@ export default class Git extends View {
     const file = (path) => this.st?.files.find((f) => f.path === path);
     switch (action) {
       case "fetch": case "pull": case "push": case "publish": return this.sync(action, cx);
-      case "switch": return this.act(`Switching to ${arg}…`, cx, (r) => r.run(["switch", arg]));
+      case "switch": return this.switchBranch(arg, cx);
+      case "switch-merge": return this.switchBranch(arg, cx, { merge: true });
+      case "switch-stash": return this.switchBranch(arg, cx, { stash: true });
       case "create": return this.act(`Creating ${arg}…`, cx, (r) => r.run(["switch", "-c", arg]));
       case "stash": return this.act("Stashing…", cx, (r) => r.run(["stash", "push", "--include-untracked", "-m", arg || `WIP on ${this.st?.branch.head ?? "HEAD"}`]));
       case "pop": return this.act("Popping the stash…", cx, async (r) => r.run(["stash", "pop", await r.stashRef(arg.ref, arg.oid)]));
@@ -156,12 +159,28 @@ export default class Git extends View {
     }
   }
 
+  switchBranch(name, cx, options = {}) {
+    this.act(`Switching to ${name}…`, cx, async (r) => {
+      try {
+        await r.switchBranch(name, options);
+        if (options.stash) notify({ title: `Switched to ${name}`, body: "Changes remain in the stash; apply them manually when ready.", level: "success" });
+      } catch (e) {
+        // Offer recovery only for Git's local-change refusal, not invalid refs or worktree locks.
+        if (!options.merge && !options.stash && /would be overwritten|local changes|commit your changes or stash/i.test(String(e?.message ?? e))) {
+          confirm("Local changes prevent switching", `${name}\nCarry changes attempts a merge and can leave conflicts.\nStash and switch keeps changes in the stash, without applying them.`, r.root, "switch-merge", name, "Carry changes", { action: "switch-stash", arg: name, label: "Stash and switch" });
+          return;
+        }
+        throw e;
+      }
+    });
+  }
+
   // ---- opening things ----
   spec() { return { root: this.repo.root, on: this.repo.on }; }
   openDiff(path) { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { diff: { ...this.spec(), path } } }); }
-  openNextCommit() { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { nextCommit: { ...this.spec(), message: this.box.value(), amend: this.amend } } }); }
+  openNextCommit() { openOverlay({ mod: "git", kind: "dialog", width: 0.9, height: 0.9, props: { nextCommit: { ...this.spec(), message: this.box.value(), amend: this.amend, signoff: this.signoff, noVerify: this.noVerify } } }); }
   openHistory() { openOverlay({ mod: "git", kind: "dialog", width: 0.92, height: 0.9, props: { history: this.spec() } }); }
-  openBranches() { openOverlay({ mod: "git", kind: "popup", width: 320, height: 420, at: under(320), props: { branches: { ...this.spec(), head: this.st?.branch.head } } }); }
+  openBranches() { openOverlay({ mod: "git", kind: "popup", width: 360, at: under(360, 4, this.branchBounds), props: { branches: { ...this.spec(), head: this.st?.branch.head } } }); }
   openMore() {
     const b = this.st?.branch ?? {}, stashes = this.st?.stashes ?? [], any = (this.st?.files.length ?? 0) > 0;
     const items = [["fetch", "Fetch", "refresh"], ["pull", "Pull", "arrow-down", Boolean(b.upstream)], [b.upstream ? "push" : "publish", b.upstream ? "Push" : "Publish branch", "arrow-up", Boolean(b.head)],
@@ -252,6 +271,11 @@ export default class Git extends View {
         .child(h_flex().gap(8).items_center()
           .child(h_flex().id("amend").gap(6).items_center().cursor_pointer().text_size(12).text_color(this.amend ? t.foreground : t.muted).when(this.hasHead(), (e) => e.on_click((_e, cx) => this.toggleAmend(cx)))
             .child(checkbox("amend-box", this.amend ? "on" : "off", t, (_e, cx) => { if (this.hasHead()) this.toggleAmend(cx); })).child("Amend"))
+          .child(this.commitOption("signoff", "Sign off", this.signoff, t, (_e, cx) => {
+            this.signoff = !this.signoff; localStorage.setItem(`signoff:${JSON.stringify([this.repo.on ?? null, this.repo.root])}`, JSON.stringify(this.signoff)); cx.notify();
+          }))
+          .child(this.commitOption("no-verify", "Skip hooks", this.noVerify, t, (_e, cx) => { this.noVerify = !this.noVerify; cx.notify(); })))
+        .child(h_flex().gap(8).items_center()
           .child(div().flex_1())
           .when(Boolean(this.busy), (e) => e.child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted).child(spinner(12, t.muted)).child(this.busy)))
           .child(button("next-commit", "Preview", t, () => this.openNextCommit(), { icon: "diff", enabled: !this.busy && Boolean(st) && (this.amend || files.some((f) => !f.untracked)), tooltip: "Preview the next commit" }))
@@ -264,6 +288,7 @@ export default class Git extends View {
   title(t, b, sync) {
     return h_flex().flex_none().h(42).px(8).gap(4).items_center().border_b(1).border_color(t.border)
       .child(h_flex().id("branch").flex_1().min_w(0).h(28).px(6).gap(6).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
+        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.branchBounds = e.bounds; })
         .on_click(() => b && this.openBranches())
         .child(glyph("branch", 14, t.muted))
         .child(div().min_w(0).truncate().font_semibold().child(b ? b.head ?? `detached ${b.oid?.slice(0, 7) ?? ""}` : "Git"))
@@ -276,34 +301,68 @@ export default class Git extends View {
         .child(button("more", "", t, () => this.openMore(), { icon: "more", invisible: true, tooltip: "Fetch, pull, push, stash" })));
   }
 
+  commitOption(id, label, checked, t, toggle) {
+    return h_flex().id(id).gap(6).items_center().cursor_pointer().text_size(12).text_color(checked ? t.foreground : t.muted).on_click(toggle)
+      .child(checkbox(`${id}-box`, checked ? "on" : "off", t, toggle)).child(label);
+  }
+
   // ---- the branch picker (a popup of this mod) ----
   initBranches(spec, overlay, cx) {
-    this.picking = { ...spec, overlay, list: null, q: "" };
+    this.picking = { ...spec, overlay, list: null, q: "", selected: 0 };
+    this.branchFocus = cx.focus_handle(); this.branchScroll = VirtualListScrollHandle.new();
     this.filter = InputState.new({ placeholder: "Switch to or create a branch…" });
-    this.filter.on("change", (_e, cx) => { this.picking.q = this.filter.value().trim(); cx.notify(); });
-    this.filter.on("submit", () => this.pickBranch(this.picking.q, true));
+    this.filter.on("change", (_e, cx) => { this.picking.q = this.filter.value().trim(); this.picking.selected = 0; this.branchScroll.scroll_to_item(0); cx.notify(); });
+    this.filter.on("submit", () => this.chooseBranch());
+    this.filter.focus();
     cx.spawn(async (cx) => { try { this.picking.list = await new Repo(spec.root, spec.on).branches(); } catch (e) { this.picking.error = String(e?.message ?? e); } cx.notify(); });
   }
-  pickBranch(name, typed = false) {
+  branchItems() {
+    const p = this.picking, list = (p.list ?? []).filter((b) => b.name.toLowerCase().includes(p.q.toLowerCase()));
+    const local = list.filter((b) => !b.remote).sort((a, b) => Number(b.name === p.head) - Number(a.name === p.head));
+    const remote = list.filter((b) => b.remote), items = [...local];
+    if (remote.length) items.push({ section: true, name: "Remote" }, ...remote);
+    const fresh = p.list && p.q && !(p.list ?? []).some((b) => b.name === p.q) && /^[^\s~^:?*[\\]+$/.test(p.q);
+    if (fresh) items.unshift({ name: p.q, create: true });
+    return items;
+  }
+  chooseBranch() {
+    const b = this.branchItems().filter((b) => !b.section)[this.picking.selected];
+    if (b) this.pickBranch(b.name, b.create);
+  }
+  branchKey(e, cx) {
+    const p = this.picking, items = this.branchItems(), choices = items.filter((b) => !b.section);
+    if (e.key === "escape") { cx.stop_propagation(); closeOverlay(p.overlay); }
+    else if (e.key === "enter") { cx.stop_propagation(); this.chooseBranch(); }
+    else if (e.key === "up" || e.key === "down") {
+      cx.stop_propagation();
+      p.selected = Math.max(0, Math.min(choices.length - 1, p.selected + (e.key === "down" ? 1 : -1)));
+      const index = items.indexOf(choices[p.selected]);
+      if (index >= 0) this.branchScroll.scroll_to_item(index, "center");
+      cx.notify();
+    }
+  }
+  pickBranch(name, create = false) {
     const p = this.picking;
-    if (!name) return;
-    const exists = (p.list ?? []).some((b) => b.name === name);
-    if (name !== p.head) ask(p.root, exists || !typed ? "switch" : "create", name);
+    if (!name || !p.list) return;
+    if (name !== p.head || create) ask(p.root, create ? "create" : "switch", name);
     closeOverlay(p.overlay);
   }
   renderBranches(t) {
-    const p = this.picking, q = p.q.toLowerCase(), list = (p.list ?? []).filter((b) => b.name.toLowerCase().includes(q));
-    const fresh = p.q && !(p.list ?? []).some((b) => b.name === p.q) && /^[^\s~^:?*[\\]+$/.test(p.q);
-    return v_flex().id("branches").size_full().p(6).gap(2).bg(t.popover).text_color(t.foreground).text_size(13)
-      .child(div().mx(2).mb(4).h(30).px(8).flex().items_center().rounded(6).border_1().border_color(t.border).child(Input.new(this.filter).w_full().text_size(12.5)))
-      .when(Boolean(fresh), (e) => e.child(menuRow("create", `Create branch “${p.q}”`, "plus", t, () => this.pickBranch(p.q, true))))
-      .child(v_flex().id("branch-list").h(330).overflow_y_scrollbar().gap(1)
-        .when(!p.list && !p.error, (e) => e.child(div().px(8).py(6).text_color(t.muted).child("Reading branches…")))
-        .when(Boolean(p.error), (e) => e.child(div().px(8).py(6).text_color(t.ansi1).child(p.error)))
-        .children(list.map((b) => h_flex().id(`b-${b.name}`).h(32).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
-          .on_click(() => this.pickBranch(b.name))
-          .child(div().w(14).flex_none().when(b.name === p.head, (e) => e.child(glyph("check", 14, t.foreground))))
-          .child(div().flex_1().min_w(0).truncate().child(b.name)).child(div().flex_none().text_size(11).text_color(t.dim).child(b.when)))));
+    const p = this.picking, items = this.branchItems(), choices = items.filter((b) => !b.section), selected = choices[p.selected];
+    const height = Math.min(330, items.reduce((h, b) => h + (b.section ? 24 : 32), 0));
+    return v_flex().id("branches").w_full().p(6).gap(4).bg(t.popover).text_color(t.foreground).text_size(13)
+      .track_focus(this.branchFocus).on_key_down((e, cx) => this.branchKey(e, cx))
+      .child(div().h(30).flex_none().px(8).flex().items_center().rounded(6).border_1().border_color(t.border).child(Input.new(this.filter).w_full().text_size(12.5)))
+      .when(!p.list || !items.length, (e) => e.child(div().px(8).py(6).text_color(p.error ? t.ansi1 : t.muted).child(p.error ?? (p.list ? "No matching branches" : "Reading branches…"))))
+      .when(items.length > 0, (e) => e.child(v_virtual_list("branch-list", items.length, items.map((b) => b.section ? 24 : 32), (i) => `${items[i].section ? "section" : items[i].remote ? "remote" : "local"}-${items[i].name}`, (range) => items.slice(range.start, range.end).map((b) => {
+        if (b.section) return div().h(24).flex_none().px(8).pt(4).text_size(11).text_color(t.dim).child("Remote");
+        return h_flex().id(`b-${b.remote ? "remote-" : ""}${b.name}`).h(32).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().text_color(b.remote ? t.muted : t.foreground)
+          .when(b === selected, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
+          .on_click(() => this.pickBranch(b.name, b.create))
+          .child(div().w(14).flex_none().when(b.create || (!b.remote && b.name === p.head), (e) => e.child(glyph(b.create ? "plus" : "check", 14, t.foreground))))
+          .child(div().flex_1().min_w(0).truncate().child(b.create ? `Create branch “${b.name}”` : b.remote ? `origin/${b.name}` : b.name))
+          .child(div().flex_none().text_size(11).text_color(t.dim).child(b.when ?? ""));
+      })).h(height).w_full().track_scroll(this.branchScroll)));
   }
 }
 
@@ -339,6 +398,7 @@ function renderConfirm(c, t) {
     .child(div().flex_1())
     .child(h_flex().gap(8).justify_end()
       .child(button("no", "Cancel", t, () => closeOverlay(c.overlay)))
+      .when(Boolean(c.alternative), (e) => e.child(button("alternative", c.alternative.label, t, () => { ask(c.root, c.alternative.action, c.alternative.arg); closeOverlay(c.overlay); })))
       .child(h_flex().id("yes").h(28).px(12).items_center().rounded(6).bg(t.ansi1).text_color("#ffffff").font_medium().text_size(12).cursor_pointer().hover((s) => s.opacity(0.88))
         .on_click(() => { ask(c.root, c.action, c.arg); closeOverlay(c.overlay); }).child(c.yes)));
 }
