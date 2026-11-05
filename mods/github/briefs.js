@@ -1,19 +1,21 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, EditorState, Editor } from "gpui-base";
-import { theme, closeOverlay, openOverlay, notify } from "herdr";
+import { theme, closeOverlay, openOverlay, notify, shared, setShared } from "herdr";
 import { primer, glyph, button } from "./ui.js";
 import { DEFAULTS, VARS, unknownVars, issueBrief, prReviewBrief, prFixBrief, runBrief } from "./brief.js";
 
-// The brief templates you edit, kept in localStorage as brief:<name>; only the ones that differ from the default are stored.
-const key = (name) => `brief:${name}`;
+// The brief templates you edit, in shared github.briefs ({ name: text }): localStorage is per mod copy, and this dialog,
+// the panel, the issue dialog and the run dialog are each a copy. Only the ones that differ from the default are kept.
+const KEY = "github.briefs";
 export function savedTemplates() {
-  const out = {};
-  for (const name of Object.keys(DEFAULTS)) { try { const v = localStorage.getItem(key(name)); if (typeof v === "string") out[name] = v; } catch { /* unreadable: the default */ } }
+  const s = shared(KEY), out = {};
+  for (const name of Object.keys(DEFAULTS)) if (typeof s?.[name] === "string") out[name] = s[name];
   return out;
 }
 function save(name, text) {
-  try { if (text === DEFAULTS[name]) localStorage.removeItem(key(name)); else localStorage.setItem(key(name), text); }
-  catch (e) { notify({ title: "Template not saved", body: String(e?.message ?? e), level: "error" }); }
+  const next = savedTemplates();
+  if (text === DEFAULTS[name]) delete next[name]; else next[name] = text;
+  setShared(KEY, next);
 }
 
 // sample: what the preview is built on, { kind: "issue" | "pr" | "run", data, local, jobs, log }; pick: the template shown first.
