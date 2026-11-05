@@ -48,8 +48,9 @@ export class NextCommit {
   }
   render(cx) {
     const t = theme(), files = this.files, rows = this.rows;
+    const msg = (this.message || (this.amend ? "Keep the last commit message" : "No commit message")).split("\n");
     const label = this.amend ? "Amend" : this.tracked ? "Commit tracked" : "Staged";
-    const summary = this.loading ? "Reading changes…" : `${label}: ${files.length} files${this.tracked ? ", untracked files not included" : ""}`;
+    const summary = this.loading ? "Reading changes…" : `${label}: ${files.length} ${files.length === 1 ? "file" : "files"}${this.tracked ? ", untracked files not included" : ""}`;
     const canCommit = !this.loading && !this.error && Boolean(this.message.trim() || this.amend) && (this.amend || files.length > 0);
     return v_flex().id("next-commit").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h_flex().flex_none().h(48).px(16).gap(8).items_center().border_b(1).border_color(t.border)
@@ -60,8 +61,9 @@ export class NextCommit {
         .child(button("next-submit", this.amend ? "Amend" : "Commit", t, () => this.commit(), { primary: true, icon: "commit", enabled: canCommit }))
         .child(button("next-close", "", t, () => closeOverlay(this.overlay), { icon: "close", invisible: true, tooltip: "Close (Esc)" })))
       .child(div().flex_none().px(16).py(8).text_color(t.muted).child(summary))
-      .child(v_flex().id("next-message").flex_none().h(72).overflow_y_scrollbar().px(16).py(8).gap(2).border_y(1).border_color(t.border).font_family(MONO).text_size(12)
-        .children((this.message || (this.amend ? "Keep the last commit message" : "No commit message")).split("\n").map((l) => div().flex_none().child(l || " "))))
+      // As tall as its lines (21 px each, measured), up to 6 of them; longer scrolls (a scroller alone takes its max).
+      .child(v_flex().id("next-message").flex_none().h(18 + 21 * Math.min(6, msg.length)).overflow_y_scrollbar().px(16).py(8).gap(2).border_y(1).border_color(t.border).font_family(MONO).text_size(12)
+        .children(msg.map((l) => div().flex_none().child(l || " "))))
       .when(Boolean(this.error), (e) => e.child(div().flex_none().px(16).py(8).text_color(t.ansi1).child(this.error)))
       .child(h_flex().flex_1().min_h(0)
         .child(div().w(300).flex_none().h_full().relative().border_r(1).border_color(t.border)
